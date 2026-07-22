@@ -16,17 +16,22 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from . import crypto
 from .models import Profile
 
 
 class ProfileStore:
-    def __init__(self, root: Optional[str | Path] = None):
+    def __init__(self, root: Optional[str | Path] = None,
+                 password: Optional[str] = None):
         self.root = Path(root or (Path.home() / ".persona")).expanduser()
         self.profiles_dir = self.root / "profiles"
         self.userdata_dir = self.root / "user-data"
         self.config_path = self.root / "config.json"
         self.profiles_dir.mkdir(parents=True, exist_ok=True)
         self.userdata_dir.mkdir(parents=True, exist_ok=True)
+        # The master password comes from the caller or the environment, so a
+        # launched subprocess inherits it without it ever hitting disk.
+        self._password = password or os.environ.get("PERSONA_PASSWORD") or None
 
     # ---- config (small key/value settings) -------------------------------
     # CloakBrowser is the top-priority default: it's the strongest engine.
@@ -54,6 +59,73 @@ class ProfileStore:
         self.save_config(cfg)
         return name
 
+    # ---- vault (encrypt-at-rest for secrets) -----------------------------
+    # The fields worth encrypting: anything that grants access if leaked. Cookies
+    # live in Chromium's own encrypted store, so the one in our plaintext JSON is
+    # the proxy password.
+    SECRET_PATHS = (("proxy", "password"),)
+
+    def vault(self) -> Optional[dict]:
+        """The vault descriptor ({salt, verifier}) if a password was ever set."""
+        return self.get_config().get("vault")
+
+    def vault_enabled(self) -> bool:
+        return self.vault() is not None
+
+    def unlocked(self) -> bool:
+        """True when secrets can actually be read/written (right password set)."""
+        v = self.vault()
+        if not v:
+            return True                      # nothing to unlock
+        return bool(self._password) and crypto.check_password(
+            self._password, v["salt"], v["verifier"])
+
+    def enable_vault(self, password: str) -> int:
+        """Turn on the vault and encrypt every existing secret. Returns the count."""
+        crypto._require()
+        if self.vault_enabled():
+            raise RuntimeError("A vault is already set up. Use `vault change` to rotate it.")
+        salt = crypto.new_salt()
+        cfg = self.get_config()
+        cfg["vault"] = {"salt": salt, "verifier": crypto.make_verifier(password, salt)}
+        self.save_config(cfg)
+        self._password = password
+        # Re-save every profile so its secrets get written back encrypted.
+        n = 0
+        for prof in self.list():
+            if any(self._secret_values(prof)):
+                self.save(prof)
+                n += 1
+        return n
+
+    def _secret_values(self, profile: Profile) -> list:
+        vals = []
+        d = profile.to_dict()
+        for a, b in self.SECRET_PATHS:
+            sec = (d.get(a) or {}).get(b) if isinstance(d.get(a), dict) else None
+            vals.append(sec)
+        return vals
+
+    def _apply_secrets(self, data: dict, mode: str) -> dict:
+        """Encrypt (mode='enc') or decrypt (mode='dec') the secret fields in a
+        profile dict, in place. A no-op when there's no vault."""
+        v = self.vault()
+        if not v:
+            return data
+        pw = self._password
+        for a, b in self.SECRET_PATHS:
+            node = data.get(a)
+            if not isinstance(node, dict) or not node.get(b):
+                continue
+            val = node[b]
+            if mode == "enc":
+                if pw and self.unlocked() and not crypto.is_encrypted(val):
+                    node[b] = crypto.encrypt(pw, v["salt"], val)
+            else:  # dec
+                if crypto.is_encrypted(val):
+                    node[b] = crypto.decrypt(pw, v["salt"], val) if (pw and self.unlocked()) else None
+        return data
+
     # ---- paths -----------------------------------------------------------
     def _path(self, profile_id: str) -> Path:
         return self.profiles_dir / f"{profile_id}.json"
@@ -66,16 +138,22 @@ class ProfileStore:
     # ---- CRUD ------------------------------------------------------------
     def save(self, profile: Profile) -> Profile:
         profile.updated_at = time.time()
-        self._path(profile.id).write_text(
-            json.dumps(profile.to_dict(), indent=2), encoding="utf-8"
-        )
+        # Refuse to write a plaintext secret over an encrypted one: if the vault
+        # is on but locked, saving would silently downgrade security.
+        if self.vault_enabled() and not self.unlocked() and any(self._secret_values(profile)):
+            raise crypto.VaultLocked(
+                "the vault is locked — unlock with the master password before saving "
+                "a profile that has a proxy password")
+        data = self._apply_secrets(profile.to_dict(), "enc")
+        self._path(profile.id).write_text(json.dumps(data, indent=2), encoding="utf-8")
         return profile
 
     def get(self, profile_id: str) -> Optional[Profile]:
         path = self._path(profile_id)
         if not path.exists():
             return None
-        return Profile.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        data = self._apply_secrets(json.loads(path.read_text(encoding="utf-8")), "dec")
+        return Profile.from_dict(data)
 
     def find_by_name(self, name: str) -> Optional[Profile]:
         for p in self.list():
@@ -91,7 +169,8 @@ class ProfileStore:
         out: list[Profile] = []
         for f in sorted(self.profiles_dir.glob("*.json")):
             try:
-                out.append(Profile.from_dict(json.loads(f.read_text(encoding="utf-8"))))
+                data = self._apply_secrets(json.loads(f.read_text(encoding="utf-8")), "dec")
+                out.append(Profile.from_dict(data))
             except (json.JSONDecodeError, KeyError):
                 continue  # skip corrupt files rather than crash
         return sorted(out, key=lambda p: p.created_at)

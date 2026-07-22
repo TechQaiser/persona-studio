@@ -89,6 +89,33 @@ persona apply --tag old --proxy "" -y              # "" means go direct
 Only the flags you pass are changed — everything else is left alone, so the same
 command is safe to run again later for one more tweak.
 
+### Encrypting secrets at rest
+
+By default the store is plaintext JSON — easy to read and back up, but a proxy
+password sitting in a file is a risk. Turn on the vault to encrypt just the
+secrets (the proxy password), leaving everything else readable:
+
+```bash
+pip install -e ".[secure]"                 # one-time: the crypto backend
+persona vault enable                        # prompts for a master password
+persona vault status                        # off / locked / unlocked
+```
+
+Enabling re-writes existing proxy passwords as `enc:v1:…` tokens
+(AES via Fernet, key derived with PBKDF2-HMAC-SHA256). After that, give the
+password when you need the proxy — set `PERSONA_PASSWORD` or pass `--password`:
+
+```bash
+PERSONA_PASSWORD=… persona launch acct-01   # subprocess inherits it; proxy works
+persona list                                # works without it — only the secret is hidden
+```
+
+Names, OS, tags and the rest stay visible while locked, so you can still manage
+profiles; only the proxy password is withheld until you unlock. **Keep the
+password — there's no recovery.** This covers the engine store and CLI; the
+dashboard's own profile store isn't encrypted yet (that needs the password in
+the browser layer, which is a separate design).
+
 ### Cookies
 
 Move a logged-in session between machines, or seed a fresh profile with one you
@@ -159,7 +186,8 @@ store.save(profile)
 | `models.py` | `Fingerprint`, `Proxy`, `Profile` data models |
 | `store.py` | JSON-per-profile persistence + user-data dirs |
 | `cookies.py` | Cookie import/export across the formats people actually have |
-| `probe.py` | Proxy/leak test and the trust report a fingerprinter would produce |
+| `crypto.py` | Encrypt-at-rest for secrets (optional `cryptography` backend) |
+| `probe.py` | Proxy/leak/TLS test and the trust report a fingerprinter would produce |
 | `bulk.py` | Multi-profile synchroniser: one patch, applied to many |
 | `warmup.py` | Human-paced browsing that gives a fresh profile a past |
 | `automation.py` | CDP attach so Selenium/Puppeteer/Playwright can drive a profile |

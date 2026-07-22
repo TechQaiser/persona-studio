@@ -5,6 +5,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Encrypt-at-rest for secrets** (`persona vault`, `crypto.py`): a master
+  password encrypts proxy passwords in the store (Fernet/AES, key via
+  PBKDF2-HMAC-SHA256), leaving the rest of each profile readable. Supply the
+  password via `PERSONA_PASSWORD` or `--password` at use time so it never hits
+  disk; locked stores still list/manage profiles but withhold the secret, and
+  saving would-be-plaintext over an encrypted secret is refused. Optional
+  `[secure]` extra; degrades gracefully when it isn't installed.
 - **TLS/JA3 handshake checker** (`persona tls`, `probe.py`): reads the profile's
   own TLS/HTTP2 handshake back from an echo service and reports its JA3 and JA4
   fingerprints — the network layer JavaScript can never touch, since the server

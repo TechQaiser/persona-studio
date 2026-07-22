@@ -21,6 +21,7 @@ Command-line interface for Persona.
     persona apply [refs] [--tag|--all] --engine …  (one change, many profiles)
     persona engines                               (list launch engines + install status)
     persona default-engine [name]                 (show/set the engine new profiles use)
+    persona vault enable|status                   (encrypt proxy passwords at rest)
     persona serve [--host] [--port]               (run the HTTP API for the dashboard)
 """
 
@@ -462,6 +463,44 @@ def cmd_apply(args, store: ProfileStore) -> int:
     return 0
 
 
+def _prompt_password(confirm: bool = False) -> str:
+    import getpass
+    pw = getpass.getpass("Master password: ")
+    if confirm and getpass.getpass("Confirm master password: ") != pw:
+        raise RuntimeError("Passwords didn't match.")
+    return pw
+
+
+def cmd_vault(args, store: ProfileStore) -> int:
+    from . import crypto
+    if args.vault_command == "status":
+        if not store.vault_enabled():
+            state = _c("off", C.DIM) + " — proxy passwords are stored in plaintext"
+        elif store.unlocked():
+            state = _c("unlocked", C.GRN)
+        else:
+            state = _c("locked", C.YEL) + " — set PERSONA_PASSWORD or pass --password"
+        print(_c("Vault: ", C.B) + state)
+        if not crypto.available():
+            print(_c('  (install the backend with: pip install -e ".[secure]")', C.DIM))
+        return 0
+
+    if not crypto.available():
+        print(_c('Encrypted storage needs the cryptography package:  pip install -e ".[secure]"', C.RED))
+        return 1
+
+    if args.vault_command == "enable":
+        pw = store._password or _prompt_password(confirm=True)
+        store._password = pw
+        n = store.enable_vault(pw)
+        print(_c(f"Vault enabled — encrypted secrets in {n} profile(s).", C.GRN))
+        print(_c("Keep this password safe: without it, encrypted proxy passwords can't be recovered.", C.YEL))
+        print(_c("Set PERSONA_PASSWORD (or pass --password) when launching so profiles can use their proxy.", C.DIM))
+        return 0
+
+    return 1
+
+
 def cmd_serve(args, store: ProfileStore) -> int:
     from .server import serve
     serve(host=args.host, port=args.port, data_dir=args.data_dir)
@@ -516,6 +555,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"persona {__version__}")
     p.add_argument("--data-dir", default=None,
                    help="Override the data directory (default: ~/.persona)")
+    p.add_argument("--password", default=None,
+                   help="Master password for the secrets vault "
+                        "(or set the PERSONA_PASSWORD env var)")
     sub = p.add_subparsers(dest="command", required=True)
 
     c = sub.add_parser("create", help="Create a new profile")
@@ -672,6 +714,11 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
     c.set_defaults(func=cmd_apply)
 
+    c = sub.add_parser("vault", help="Encrypt proxy passwords at rest with a master password")
+    vt = c.add_subparsers(dest="vault_command", required=True)
+    vt.add_parser("status", help="Show whether the vault is on, locked or unlocked").set_defaults(func=cmd_vault)
+    vt.add_parser("enable", help="Turn on encryption and encrypt existing secrets").set_defaults(func=cmd_vault)
+
     c = sub.add_parser("serve", help="Run the HTTP API for the dashboard")
     c.add_argument("--host", default="127.0.0.1")
     c.add_argument("--port", type=int, default=8787)
@@ -683,7 +730,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    store = ProfileStore(args.data_dir)
+    store = ProfileStore(args.data_dir, password=args.password)
     try:
         return args.func(args, store)
     except RuntimeError as e:
