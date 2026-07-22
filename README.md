@@ -1,0 +1,234 @@
+<div align="center">
+
+# Persona
+
+### Open-source, self-hosted anti-detect browser & profile manager
+
+Create browser profiles that each look like a real, separate device — a
+*coherent* fingerprint, its own proxy, and a persistent session — then manage
+and launch them from a clean web console or CLI.
+
+A self-hosted alternative to GoLogin, Multilogin and AdsPower.
+
+![python](https://img.shields.io/badge/python-3.9%2B-blue)
+![react](https://img.shields.io/badge/react-18-61DAFB)
+![license](https://img.shields.io/badge/license-MIT-green)
+![tests](https://img.shields.io/badge/tests-passing-brightgreen)
+![status](https://img.shields.io/badge/status-beta-orange)
+
+<br>
+
+![Persona Studio dashboard](docs/screenshot-dashboard.png)
+
+</div>
+
+---
+
+## Why Persona?
+
+Most fingerprint tools randomise each value on its own — and that's exactly what
+gets them caught. Anti-bot systems don't read values in isolation; they
+**cross-check** them. A macOS user-agent with an NVIDIA GPU, or a 4-core phone
+claiming a 1440p screen, is an instant tell.
+
+Persona's core idea is **coherence**. It picks a realistic device archetype
+first, then draws *every* value (OS, user-agent, GPU, screen, CPU, RAM, timezone,
+language) from that archetype's real-world pool. The result is an identity whose
+parts all agree — and a live coherence check that proves it, both in the engine
+(`validate()`) and in the dashboard's real-time meter.
+
+That coherence-first design is the thing commercial tools don't surface, and it's
+what makes Persona distinctive.
+
+## What's in the box
+
+Persona is a monorepo with two parts that work together:
+
+```
+persona-studio/
+├── engine/        Python core — fingerprints, storage, launcher, CLI
+├── dashboard/     React web console — the visual profile manager
+└── start.bat      Windows one-click launcher (installs + starts both)
+```
+
+| | |
+|---|---|
+| 🧬 **Coherent fingerprints** | OS, UA, GPU, screen, hardware, timezone & language always agree |
+| 🛡️ **Live coherence meter** | Real-time consistency score as you edit — nobody else shows this |
+| 🌐 **Proxy-aware** | Set a proxy's country and locale/timezone auto-align to it |
+| 🎛️ **Rich editor** | Canvas, WebRTC, audio, fonts, geolocation, media devices, DNT |
+| 💾 **Persistent sessions** | Cookies & localStorage survive between launches |
+| 📦 **Bulk create** | Spin up dozens of coherent profiles at once |
+| 🗂️ **Folders, tags, search** | Organize hundreds of accounts |
+| 🖥️ **Real browser** | Launches a real browser, per-profile isolation |
+| 🔌 **Pluggable engines** | Swap the stealth backend: CloakBrowser, Camoufox, Patchright, Playwright |
+| 🔗 **Startup URLs** | Each profile opens the pages you want, in its own tabs |
+| 🖱️ **One-click launcher** | `start.bat` installs everything and starts both halves on Windows |
+| ⌨️ **CLI + Python API** | Script it or drive it by hand |
+
+## Quick start
+
+**Prerequisites:** [Python 3.9+](https://www.python.org/downloads/) and (for the
+dashboard) [Node.js 18+](https://nodejs.org/). Check with `python --version` and
+`node --version`.
+
+```bash
+git clone https://github.com/TechQaiser/persona-studio.git
+cd persona-studio
+```
+
+### Easiest (Windows): one-click launcher
+
+Double-click **`start.bat`** in the project folder. On first run it installs
+everything, lets you pick the default browser engine (CloakBrowser first), then
+starts the engine API + dashboard and opens the console in your browser. Two
+terminal windows stay open while it runs — close them to stop. To re-run setup,
+delete `.persona_setup_done`.
+
+The engine you pick "wins": it becomes the default for every new profile you
+create afterwards, from the batch menu, the CLI, or the dashboard. Change it any
+time with `persona default-engine cloak`.
+
+Prefer to do it by hand, or on macOS/Linux? Follow the manual steps below —
+the two parts are independent, so you can run the engine, the dashboard, or both.
+
+### 1. Engine (backend)
+
+```bash
+cd engine
+pip install -e ".[launch]"      # omit [launch] to skip Playwright
+playwright install chromium     # downloads the browser (needed for `launch`)
+
+persona create acct-01 --os windows --locale en-US
+persona launch acct-01          # opens a Chromium window; close it to exit
+```
+
+> **Windows / PowerShell:** keep the quotes around `".[launch]"` exactly as
+> shown — without them the shell mis-reads the brackets.
+>
+> **`persona` not recognized?** The install worked but its Scripts folder isn't
+> on your PATH. Either reopen your terminal, or run it as a module instead:
+> `python -m persona create acct-01 --os windows --locale en-US`.
+
+### 2. Dashboard (frontend)
+
+```bash
+cd dashboard
+npm install
+npm run dev                      # then open http://localhost:5173
+```
+
+> The dashboard runs on its own with in-memory **sample data**, so you can
+> explore it without the engine (the footer shows *Demo mode*).
+
+### 3. Connect them (launch real browsers from the dashboard)
+
+Start the engine's API, then reload the dashboard — its footer flips to
+*Engine online* and the launch (▶) button now opens a **real Chromium window**,
+with profiles saved to disk.
+
+```bash
+cd engine
+pip install -e ".[api,launch]"
+playwright install chromium
+persona serve                    # HTTP API on http://localhost:8787
+```
+
+Leave `persona serve` running and start the dashboard (`npm run dev`) in a second
+terminal. That's it — clicking ▶ launches the profile for real.
+
+Full details live in each part's README:
+[engine/README.md](engine/README.md) · [dashboard/README.md](dashboard/README.md).
+
+## How it works
+
+```
+             ┌──────────────┐
+   pick OS → │  archetype   │   curated real-world combos (engine/persona/devices.py)
+             └──────┬───────┘
+                    │  every value drawn from this archetype's pool
+                    ▼
+             ┌──────────────┐        ┌──────────────┐
+             │ Fingerprint  │───────▶│  validate()  │   coherence gate
+             └──────┬───────┘        └──────────────┘
+                    │
+        ┌───────────┴────────────┐
+        ▼                        ▼
+  context options          stealth.js init script
+  (UA, viewport, locale,   (navigator.platform, WebGL,
+   timezone, proxy, CH)     hardwareConcurrency, webdriver, canvas noise)
+        └───────────┬────────────┘
+                    ▼
+          Chromium (persistent context per profile)
+```
+
+See [docs/architecture.md](docs/architecture.md) for the full walkthrough,
+including how to connect the dashboard to the engine.
+
+## Manager + pluggable engines
+
+Persona's job is to be the **manager** — coherent identities, proxies, sessions,
+folders, and a dashboard. The actual stealth browser is a **pluggable engine** you
+choose per profile:
+
+| Engine | Strength | Notes |
+|---|---|---|
+| `cloak` ⭐ | Patched Chromium binary | **Recommended.** CloakBrowser — C++-level fingerprint/TLS/CDP patches; reaches Cloudflare/DataDome/reCAPTCHA-v3-grade evasion. |
+| `camoufox` ⭐ | Patched Firefox (C++-level) | **Recommended.** Among the strongest open options; brings its own coherent fingerprint. |
+| `patchright` | Runtime-patched Playwright | Drop-in; fixes `webdriver`/CDP leaks the stock engine can't. |
+| `playwright` | Built-in, always available | Stock Chromium + injected stealth script. Passes basic bot tests (BrowserScan, sannysoft); can't beat TLS/CDP-level detection. |
+
+```bash
+persona engines                          # see what's installed + which is default
+persona create acct-01 --engine cloak    # pick a backend per profile
+persona default-engine cloak             # set the default for new profiles
+```
+
+CloakBrowser is the default out of the box. The last engine you choose anywhere
+becomes the default for the next profile you create.
+
+Being honest about limits: pure JavaScript injection (the `playwright` engine)
+has a ceiling — for Cloudflare / DataDome / reCAPTCHA-v3-grade evasion, pair a
+runtime-patched engine with a residential proxy and a warmed-up session. Persona
+stays the same manager over all of them.
+
+## Roadmap
+
+**Built**
+
+- [x] Coherent fingerprint engine + `validate()`
+- [x] Profile storage, import/export, persistent sessions
+- [x] Playwright launcher with proxy support
+- [x] Full CLI
+- [x] Web dashboard: profile grid, fingerprint editor, coherence meter, bulk create, proxies
+- [x] HTTP API (`persona serve`) connecting the dashboard to the engine — launch real browsers from the UI
+- [x] Pluggable launch engines (CloakBrowser, Camoufox, Patchright, Playwright)
+- [x] Persisted default engine + one-click Windows launcher (`start.bat`)
+- [x] Per-profile startup URLs
+
+**Next**
+
+- [ ] Cookie import/export + account warm-up
+- [ ] Local automation API (attach Selenium/Puppeteer/Playwright)
+- [ ] Multi-profile synchronizer (type once, apply to many)
+- [ ] Proxy tester + IP/WebRTC/DNS leak checker
+- [ ] Fingerprint trust checker (CreepJS / Pixelscan style score)
+- [ ] Cloud sync + team roles
+- [ ] Extensions manager, more fingerprint params (fonts, media IDs, ClientRects)
+
+Want to help? See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Legitimate use & responsibility
+
+Persona is a tool for **legitimate multi-account management**: marketing agencies
+handling many client ad accounts, QA and ad-verification testing, web-automation
+development, and privacy research — the same use cases served openly by
+commercial anti-detect browsers.
+
+Do **not** use it for fraud, credential stuffing, spam, evading bans you've
+earned, or anything that violates a site's terms of service or the law. You are
+responsible for how you use it.
+
+## License
+
+[MIT](LICENSE) — free to use, modify and distribute.

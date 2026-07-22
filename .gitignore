@@ -1,0 +1,17 @@
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+.persona/
+# node
+node_modules/
+.vite/
+# os
+.DS_Store
+# persona launcher marker
+.persona_setup_done
