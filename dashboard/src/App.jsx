@@ -6,6 +6,7 @@ import {
   Cpu, MonitorSmartphone, Fingerprint, Wifi, WifiOff, Check, Clipboard,
   Settings, Boxes, Activity, MapPin, Clock, Camera, Mic, Blocks,
   RefreshCw, Server, Sparkles, ArrowRight, Star, Circle,
+  Cookie, Download, Upload,
 } from "lucide-react";
 
 /* ================================================================== *
@@ -317,7 +318,7 @@ export default function App() {
         </main>
       </div>
 
-      {editor && <Editor profile={editor} onClose={() => setEditor(null)} onSave={(p) => { save(p); setEditor(null); }} />}
+      {editor && <Editor profile={editor} live={live} onClose={() => setEditor(null)} onSave={(p) => { save(p); setEditor(null); }} />}
       {bulk && <BulkModal onClose={() => setBulk(false)} folder={folder} onCreate={async (list) => {
         if (live) { for (const p of list) { try { await api.create({ ...p, id: undefined, _new: true }); } catch {} } await refresh(); }
         else { setProfiles(ps => [...ps, ...list]); }
@@ -539,7 +540,7 @@ function newProfile(folder, defaultEngine = ENGINE_ORDER[0]) {
 }
 
 /* ---- Fingerprint editor ------------------------------------------ */
-function Editor({ profile, onClose, onSave }) {
+function Editor({ profile, live, onClose, onSave }) {
   const [p, setP] = useState(profile);
   const [tab, setTab] = useState("general");
   const set = (patch) => setP(x => ({ ...x, ...patch }));
@@ -549,6 +550,38 @@ function Editor({ profile, onClose, onSave }) {
 
   const iss = coherence(p);
   const score = Math.max(0, 100 - iss.length * 22);
+
+  // Cookies live in the profile's real browser session, so they can only be
+  // moved when the engine is running and the profile has been saved.
+  const cookiesReady = live && !p._new;
+  const [ckBusy, setCkBusy] = useState("");
+  const [ckMsg, setCkMsg] = useState("");
+  const [ckReplace, setCkReplace] = useState(false);
+
+  const exportCookies = async () => {
+    setCkBusy("export"); setCkMsg("");
+    try {
+      const { cookies } = await api.exportCookies(p.id);
+      const blob = new Blob([JSON.stringify({ cookies, origins: [] }, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${(p.name || "profile").replace(/[^\w.-]+/g, "-")}-cookies.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      setCkMsg(`Exported ${cookies.length} cookie${cookies.length === 1 ? "" : "s"}.`);
+    } catch (e) { setCkMsg("Export failed: " + e.message); }
+    setCkBusy("");
+  };
+
+  const importCookies = async (file) => {
+    if (!file) return;
+    setCkBusy("import"); setCkMsg("");
+    try {
+      const res = await api.importCookies(p.id, await file.text(), ckReplace);
+      setCkMsg(`Imported ${res.imported} cookie${res.imported === 1 ? "" : "s"} from ${file.name}.`);
+    } catch (e) { setCkMsg("Import failed: " + e.message); }
+    setCkBusy("");
+  };
 
   return (
     <div className="ps-overlay" onClick={onClose}>
@@ -686,6 +719,31 @@ function Editor({ profile, onClose, onSave }) {
               <Field label="Startup URLs (one per line)"><textarea className="ps-in mono" rows={3} value={p.startupUrls} onChange={e => set({ startupUrls: e.target.value })} placeholder={"https://facebook.com\nhttps://business.facebook.com"} /></Field>
               <Field label="WebGL vendor"><input className="ps-in mono" value={p.webglVendor} onChange={e => set({ webglVendor: e.target.value })} /></Field>
               <div className="ps-hint"><Fingerprint size={12} /> Seed & canvas noise are managed by the engine and stay stable across launches for this profile.</div>
+
+              <SectionLabel icon={<Cookie size={13} />} text="Session cookies" />
+              {cookiesReady ? (
+                <>
+                  <div className="ps-cookie-actions">
+                    <button className="ps-btn ghost sm" disabled={!!ckBusy} onClick={exportCookies}>
+                      <Download size={13} /> {ckBusy === "export" ? "Reading session…" : "Export cookies"}
+                    </button>
+                    <label className={"ps-btn ghost sm" + (ckBusy ? " disabled" : "")}>
+                      <Upload size={13} /> {ckBusy === "import" ? "Writing session…" : "Import cookies"}
+                      <input type="file" accept=".json,.txt" style={{ display: "none" }} disabled={!!ckBusy}
+                        onChange={e => { importCookies(e.target.files?.[0]); e.target.value = ""; }} />
+                    </label>
+                    <button className={"ps-toggle sm" + (ckReplace ? " on" : "")} onClick={() => setCkReplace(v => !v)}>
+                      <span className="knob" /> <em>Replace existing</em>
+                    </button>
+                  </div>
+                  {ckMsg && <div className="ps-hint">{ckMsg}</div>}
+                  <div className="ps-hint"><Cookie size={12} /> Reads and writes the profile's real cookie jar. Accepts Cookie-Editor / EditThisCookie JSON, Playwright storage state, and Netscape <code>cookies.txt</code>. Stop the profile first — its session can't be open twice.</div>
+                </>
+              ) : (
+                <div className="ps-hint"><Cookie size={12} /> {p._new
+                  ? "Save this profile first, then you can move a session in or out."
+                  : "Cookie transfer needs the engine running — start it with persona serve."}</div>
+              )}
             </>
           )}
         </div>
@@ -998,7 +1056,14 @@ select.ps-in { cursor: pointer; }
 .ps-toggle.on .knob { background: ${T.violet}; }
 .ps-toggle.on .knob::after { left: 16px; background: #fff; }
 .ps-toggle em { font-style: normal; font-size: 12px; color: ${T.text}; }
+.ps-toggle.sm { padding: 6px 10px; }
+.ps-toggle.sm .knob { width: 26px; height: 15px; }
+.ps-toggle.sm .knob::after { width: 11px; height: 11px; }
+.ps-toggle.sm.on .knob::after { left: 13px; }
 .ps-proxy-toggle { display: flex; align-items: center; justify-content: space-between; padding: 13px 15px; background: ${T.bg}; border: 1px solid ${T.line}; border-radius: 11px; margin-bottom: 16px; }
+.ps-cookie-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
+.ps-cookie-actions .ps-btn.disabled { opacity: .5; cursor: progress; }
+.ps-hint code { font-family: ${FONT.mono}; font-size: 11px; color: ${T.text}; }
 .ps-hint { display: flex; align-items: flex-start; gap: 8px; font-size: 11.5px; color: ${T.muted}; margin-top: 12px; line-height: 1.55; background: ${T.bg}; border: 1px solid ${T.lineSoft}; padding: 11px 13px; border-radius: 10px; }
 .ps-hint svg { flex-shrink: 0; margin-top: 1px; color: ${T.violet}; }
 .ps-drawer-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 17px 22px; border-top: 1px solid ${T.line}; }

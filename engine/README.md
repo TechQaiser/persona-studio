@@ -35,6 +35,29 @@ persona import acct-01.json
 persona serve                  # run the HTTP API the dashboard talks to
 ```
 
+### Cookies
+
+Move a logged-in session between machines, or seed a fresh profile with one you
+already have:
+
+```bash
+persona cookies list   acct-01                   # what's in the jar, by domain
+persona cookies export acct-01 session.json      # Playwright storage state
+persona cookies export acct-01 cookies.txt       # Netscape format (curl/wget)
+persona cookies import acct-01 session.json      # merge into the profile
+persona cookies import acct-01 session.json --clear   # replace instead
+```
+
+Import understands whatever you have on hand: Cookie-Editor / EditThisCookie
+JSON, Playwright storage state, and Netscape `cookies.txt`. Export picks the
+format from the file extension (`.txt` → Netscape) unless you pass `--format`.
+
+Two things the browser decides, not Persona: **session cookies aren't stored** (
+Chromium keeps them in memory only, so they don't survive an export), and
+Chromium **caps cookie lifetime at ~400 days**, so far-future expiry dates come
+back shortened. Close the profile before moving cookies — a session can't be
+open twice.
+
 ## HTTP API
 
 `persona serve` (needs `pip install -e ".[api]"`) starts a small FastAPI app the
@@ -50,6 +73,8 @@ dashboard uses to manage and launch profiles for real. It listens on
 | DELETE | `/api/profiles/{id}` | Delete a profile + its session |
 | POST | `/api/profiles/{id}/launch` | Open the profile in a real Chromium window |
 | POST | `/api/profiles/{id}/stop` | Close a running profile |
+| GET | `/api/profiles/{id}/cookies` | Read the profile's cookie jar |
+| POST | `/api/profiles/{id}/cookies` | Import cookies (`text` or `cookies`, plus `clear`) |
 | POST | `/api/fingerprint/validate` | Coherence check a fingerprint |
 
 ## Python API
@@ -74,9 +99,10 @@ store.save(profile)
 | `fingerprint.py` | Assembles coherent fingerprints; `validate()` proves it |
 | `models.py` | `Fingerprint`, `Proxy`, `Profile` data models |
 | `store.py` | JSON-per-profile persistence + user-data dirs |
+| `cookies.py` | Cookie import/export across the formats people actually have |
 | `stealth.py` | Generates the page-level JS patch for a fingerprint |
 | `launcher.py` | Thin dispatcher: picks the profile's engine and hands off |
-| `drivers.py` | Pluggable launch backends (playwright / patchright / camoufox) |
+| `drivers.py` | Pluggable launch backends (cloak / camoufox / patchright / playwright) |
 | `server.py` | FastAPI HTTP API the dashboard drives (`persona serve`) |
 | `cli.py` | Command-line interface |
 

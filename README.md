@@ -58,6 +58,7 @@ persona-studio/
 | 🌐 **Proxy-aware** | Set a proxy's country and locale/timezone auto-align to it |
 | 🎛️ **Rich editor** | Canvas, WebRTC, audio, fonts, geolocation, media devices, DNT |
 | 💾 **Persistent sessions** | Cookies & localStorage survive between launches |
+| 🍪 **Cookie import/export** | Move a logged-in session in or out — Cookie-Editor JSON, Playwright state, or `cookies.txt` |
 | 📦 **Bulk create** | Spin up dozens of coherent profiles at once |
 | 🗂️ **Folders, tags, search** | Organize hundreds of accounts |
 | 🖥️ **Real browser** | Launches a real browser, per-profile isolation |
@@ -205,10 +206,12 @@ stays the same manager over all of them.
 - [x] Pluggable launch engines (CloakBrowser, Camoufox, Patchright, Playwright)
 - [x] Persisted default engine + one-click Windows launcher (`start.bat`)
 - [x] Per-profile startup URLs
+- [x] Cookie import/export (CLI, API, dashboard) — Cookie-Editor JSON,
+      Playwright storage state, Netscape `cookies.txt`
 
 **Next**
 
-- [ ] Cookie import/export + account warm-up
+- [ ] Account warm-up (human-like browsing to age a fresh profile)
 - [ ] Local automation API (attach Selenium/Puppeteer/Playwright)
 - [ ] Multi-profile synchronizer (type once, apply to many)
 - [ ] Proxy tester + IP/WebRTC/DNS leak checker

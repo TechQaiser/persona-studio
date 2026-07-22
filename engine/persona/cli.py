@@ -11,6 +11,7 @@ Command-line interface for Persona.
     persona export <name|id> <file>
     persona import <file>
     persona check <name|id>                       (validate fingerprint coherence)
+    persona cookies list|export|import <name|id>  (move a session in or out)
     persona engines                               (list launch engines + install status)
     persona default-engine [name]                 (show/set the engine new profiles use)
     persona serve [--host] [--port]               (run the HTTP API for the dashboard)
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 from typing import Optional
 
 from . import __version__
@@ -205,6 +207,61 @@ def cmd_import(args, store: ProfileStore) -> int:
     return 0
 
 
+def _resolve_or_fail(args, store: ProfileStore) -> Optional[Profile]:
+    prof = store.resolve(args.ref)
+    if not prof:
+        print(_c(f"No profile matching '{args.ref}'.", C.RED))
+    return prof
+
+
+def cmd_cookies_list(args, store: ProfileStore) -> int:
+    prof = _resolve_or_fail(args, store)
+    if not prof:
+        return 1
+    from . import cookies as ck
+    jar = ck.read(prof, store, engine=args.engine)
+    if not jar:
+        print(_c(f"'{prof.name}' has no cookies yet.", C.DIM))
+        return 0
+    by_domain: dict[str, int] = {}
+    for c in jar:
+        by_domain[c["domain"]] = by_domain.get(c["domain"], 0) + 1
+    print(_c(f"{len(jar)} cookie(s) across {len(by_domain)} domain(s):", C.B))
+    for domain, n in sorted(by_domain.items(), key=lambda kv: -kv[1]):
+        print(f"  {domain:<40}{_c(str(n), C.DIM)}")
+    return 0
+
+
+def cmd_cookies_export(args, store: ProfileStore) -> int:
+    prof = _resolve_or_fail(args, store)
+    if not prof:
+        return 1
+    from . import cookies as ck
+    print(_c(f"Reading cookies from '{prof.name}'...", C.CYN))
+    jar = ck.read(prof, store, engine=args.engine)
+    # A .txt destination almost always means "give me curl's cookies.txt".
+    fmt = args.format or ("netscape" if str(args.file).lower().endswith(".txt") else "json")
+    Path(args.file).write_text(ck.dumps(jar, fmt), encoding="utf-8")
+    print(_c(f"Exported {len(jar)} cookie(s) to {args.file}  ", C.GRN) + _c(f"({fmt})", C.DIM))
+    return 0
+
+
+def cmd_cookies_import(args, store: ProfileStore) -> int:
+    prof = _resolve_or_fail(args, store)
+    if not prof:
+        return 1
+    from . import cookies as ck
+    jar = ck.read_file(args.file)
+    if not jar:
+        print(_c(f"No usable cookies found in {args.file}.", C.RED))
+        return 1
+    print(_c(f"Importing {len(jar)} cookie(s) into '{prof.name}'...", C.CYN))
+    n = ck.write(prof, store, jar, clear=args.clear, engine=args.engine)
+    note = _c("  (existing cookies were cleared first)", C.DIM) if args.clear else ""
+    print(_c(f"Imported {n} cookie(s).", C.GRN) + note)
+    return 0
+
+
 def cmd_serve(args, store: ProfileStore) -> int:
     from .server import serve
     serve(host=args.host, port=args.port, data_dir=args.data_dir)
@@ -324,6 +381,28 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("import", help="Import a profile from JSON")
     c.add_argument("file")
     c.set_defaults(func=cmd_import)
+
+    c = sub.add_parser("cookies", help="List, export or import a profile's cookies")
+    ck = c.add_subparsers(dest="cookies_command", required=True)
+
+    s = ck.add_parser("list", help="Show what's in the profile's cookie jar")
+    s.add_argument("ref")
+    s.add_argument("--engine", help="Open with a different engine than the profile's")
+    s.set_defaults(func=cmd_cookies_list)
+
+    s = ck.add_parser("export", help="Write the profile's cookies to a file")
+    s.add_argument("ref"); s.add_argument("file")
+    s.add_argument("--format", choices=["json", "netscape"],
+                   help="Output format (default: netscape for .txt, else json)")
+    s.add_argument("--engine", help="Open with a different engine than the profile's")
+    s.set_defaults(func=cmd_cookies_export)
+
+    s = ck.add_parser("import", help="Load cookies from a file into the profile")
+    s.add_argument("ref"); s.add_argument("file")
+    s.add_argument("--clear", action="store_true",
+                   help="Empty the existing jar first (replace instead of merge)")
+    s.add_argument("--engine", help="Open with a different engine than the profile's")
+    s.set_defaults(func=cmd_cookies_import)
 
     c = sub.add_parser("check", help="Validate fingerprint coherence")
     c.add_argument("ref")

@@ -5,6 +5,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Cookie import/export** (`persona/cookies.py`): move a logged-in session
+  between machines or seed a fresh profile with one you already have. Reads
+  Cookie-Editor / EditThisCookie JSON, Playwright storage state and Netscape
+  `cookies.txt`; writes JSON or `cookies.txt`. Available as
+  `persona cookies list|export|import`, `GET`/`POST /api/profiles/{id}/cookies`,
+  and Import/Export buttons in the dashboard's **Advanced** tab.
 - **One-click Windows launcher** (`start.bat`): double-click to install deps on
   first run, pick the default engine (CloakBrowser first), then start the engine
   API + dashboard and open the browser.

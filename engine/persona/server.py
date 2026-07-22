@@ -25,11 +25,13 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
 from typing import Optional
 
+from . import cookies as cookies_mod
 from . import devices
 from .fingerprint import generate, validate
 from .models import Fingerprint, Profile, Proxy
@@ -342,6 +344,54 @@ def create_app(data_dir: Optional[str] = None):
             raise HTTPException(404, "profile not found")
         _stop(pid)
         return decorate(d)
+
+    def _run_cli(*cli_args: str) -> str:
+        """Run a persona subcommand in its own process (same reasoning as launch:
+        keeps sync Playwright out of the web server) and return its output."""
+        proc = subprocess.run(
+            [sys.executable, "-m", "persona", "--data-dir", str(engine_store.root), *cli_args],
+            capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            raise HTTPException(500, (proc.stdout + proc.stderr).strip() or "command failed")
+        return proc.stdout
+
+    def _prepare(pid: str) -> dict:
+        """Fetch a dashboard profile, refuse if its session is busy, and make sure
+        the engine-side profile exists so a subcommand can open it."""
+        d = dash.get(pid)
+        if not d:
+            raise HTTPException(404, "profile not found")
+        if is_running(pid):
+            raise HTTPException(409, "stop the profile first — its session is in use")
+        engine_store.save(to_engine_profile(d))
+        return d
+
+    @app.get("/api/profiles/{pid}/cookies")
+    def export_cookies(pid: str):
+        _prepare(pid)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "cookies.json"
+            _run_cli("cookies", "export", pid, str(out))
+            data = json.loads(out.read_text(encoding="utf-8"))
+        return {"cookies": data.get("cookies", [])}
+
+    @app.post("/api/profiles/{pid}/cookies")
+    def import_cookies(pid: str, body: dict):
+        _prepare(pid)
+        # Accept either parsed cookies or the raw text of a file the user picked,
+        # so the browser doesn't have to know which format it is holding.
+        raw = body.get("text")
+        if raw is None:
+            raw = json.dumps({"cookies": body.get("cookies") or []})
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "cookies.json"
+            src.write_text(raw, encoding="utf-8")
+            args = ["cookies", "import", pid, str(src)]
+            if body.get("clear"):
+                args.append("--clear")
+            _run_cli(*args)
+        return {"ok": True, "imported": len(cookies_mod.parse(raw))}
 
     @app.post("/api/fingerprint/validate")
     def validate_fingerprint(profile: dict):

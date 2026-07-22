@@ -40,4 +40,8 @@ export const api = {
   remove: (id) => req("DELETE", `/api/profiles/${id}`),
   launch: (id) => req("POST", `/api/profiles/${id}/launch`),
   stop: (id) => req("POST", `/api/profiles/${id}/stop`),
+  // Cookies are read/written through the profile's real browser session, so
+  // these calls open it headlessly and can take a couple of seconds.
+  exportCookies: (id) => req("GET", `/api/profiles/${id}/cookies`),
+  importCookies: (id, text, clear) => req("POST", `/api/profiles/${id}/cookies`, { text, clear }),
 };
