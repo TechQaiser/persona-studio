@@ -61,6 +61,7 @@ persona-studio/
 | 🍪 **Cookie import/export** | Move a logged-in session in or out — Cookie-Editor JSON, Playwright state, or `cookies.txt` |
 | 🔎 **Trust checker** | Grades the *real* browser against the checks a fingerprinter runs |
 | 📡 **Proxy & leak test** | Exit IP, country and timezone match + WebRTC leak detection |
+| 🔐 **TLS/JA3 check** | Reads the handshake fingerprint — the one layer JS injection can't reach |
 | 🧩 **Extensions** | Per-profile unpacked extensions, isolated from every other profile |
 | ✨ **Warm-up** | Human-paced browsing so a fresh profile isn't obviously fresh |
 | 🤖 **Automation attach** | Drive a live profile from Selenium, Puppeteer or Playwright over CDP |
@@ -221,6 +222,8 @@ stays the same manager over all of them.
 - [x] Proxy tester + WebRTC leak checker (`persona proxy test`)
 - [x] Fingerprint trust checker (`persona trust`) — grades the real browser, not the config
 - [x] Extensions manager, plus fonts, media devices, ClientRects & audio noise
+
+- [x] TLS/JA3 handshake checker (`persona tls`) — the pre-JS network layer
 
 **Next**
 

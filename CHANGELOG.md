@@ -5,6 +5,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **TLS/JA3 handshake checker** (`persona tls`, `probe.py`): reads the profile's
+  own TLS/HTTP2 handshake back from an echo service and reports its JA3 and JA4
+  fingerprints — the network layer JavaScript can never touch, since the server
+  sees it before any page script runs. Checks it negotiates TLS 1.3 + HTTP/2 and
+  sends GREASE like a real Chromium. Folded into `proxy test` too, plus
+  `POST /api/profiles/{id}/tls` and a button in the dashboard.
 - **Fingerprint trust checker** (`persona trust`, `probe.py`): opens the profile
   and runs the checks a fingerprinting script runs — webdriver, plugins, UA vs
   platform, WebGL, timezone, font probing, media devices, canvas stability — then

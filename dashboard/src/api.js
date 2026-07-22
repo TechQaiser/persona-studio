@@ -47,6 +47,7 @@ export const api = {
   // These open the profile headlessly too, so they're slow by nature.
   proxyTest: (id) => req("POST", `/api/profiles/${id}/proxy-test`),
   trust: (id) => req("POST", `/api/profiles/${id}/trust`),
+  tls: (id) => req("POST", `/api/profiles/${id}/tls`),
   warmup: (id, minutes) => req("POST", `/api/profiles/${id}/warmup`, { minutes }),
   bulkUpdate: (ids, patch) => req("POST", "/api/profiles/bulk", { ids, patch }),
 };

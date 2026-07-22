@@ -584,6 +584,12 @@ function ProbePanel({ probe, kind }) {
           <span>{[d.city, d.country].filter(Boolean).join(", ")}{d.latencyMs ? ` · ${d.latencyMs} ms` : ""}</span>
         </div>
       )}
+      {(d.ja3Hash || d.ja4) && (
+        <div className="ps-probe-head" style={{ display: "block" }}>
+          {d.ja3Hash && <div className="ps-mono" style={{ fontSize: 11 }}>JA3 {d.ja3Hash}</div>}
+          {d.ja4 && <div className="ps-mono" style={{ fontSize: 11 }}>JA4 {d.ja4}</div>}
+        </div>
+      )}
       {d.error && <div className="ps-check">{d.error}</div>}
       {checks.map((c, i) => (
         <div key={i} className={"ps-check" + (c.ok ? " ok" : "")}>
@@ -749,13 +755,20 @@ function Editor({ profile, live, onClose, onSave }) {
               </Row>
 
               <SectionLabel icon={<ShieldCheck size={13} />} text="Trust check" />
-              <button className="ps-btn ghost sm" disabled={!cookiesReady || probe?.state === "running"}
-                onClick={() => runProbe("trust", () => api.trust(p.id))}>
-                <ShieldCheck size={13} /> Run trust check
-              </button>
+              <div className="ps-cookie-actions">
+                <button className="ps-btn ghost sm" disabled={!cookiesReady || probe?.state === "running"}
+                  onClick={() => runProbe("trust", () => api.trust(p.id))}>
+                  <ShieldCheck size={13} /> Run trust check
+                </button>
+                <button className="ps-btn ghost sm" disabled={!cookiesReady || probe?.state === "running"}
+                  onClick={() => runProbe("tls", () => api.tls(p.id))}>
+                  <Wifi size={13} /> Check TLS / JA3
+                </button>
+              </div>
               <ProbePanel probe={probe} kind="trust" />
+              <ProbePanel probe={probe} kind="tls" />
               <div className="ps-hint"><ShieldCheck size={12} /> {cookiesReady
-                ? "Opens the profile and runs the checks a fingerprinting script would: webdriver, plugins, UA vs platform, WebGL, fonts, media devices, canvas stability. The meter above grades the config; this grades the real browser."
+                ? "Trust check runs what a fingerprinting script reads (webdriver, plugins, UA vs platform, WebGL, fonts, canvas). TLS/JA3 reads the handshake itself — the one layer JavaScript can't touch, so it's the honest test of the engine, not the injected script."
                 : "Save the profile and start the engine to grade the real browser."}</div>
             </>
           )}

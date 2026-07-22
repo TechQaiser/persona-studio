@@ -13,6 +13,7 @@ Command-line interface for Persona.
     persona check <name|id>                       (validate fingerprint coherence)
     persona trust <name|id>                       (score it like a fingerprinter would)
     persona proxy test <name|id>                  (exit IP, country + WebRTC leaks)
+    persona tls <name|id>                         (TLS/JA3 handshake — the pre-JS layer)
     persona cookies list|export|import <name|id>  (move a session in or out)
     persona ext list|add|remove <name|id> [path]  (browser extensions)
     persona warmup <name|id> [--minutes]          (age a fresh profile by browsing)
@@ -296,6 +297,29 @@ def cmd_proxy_test(args, store: ProfileStore) -> int:
           + (f"  ({res['city']}, {res['country']})" if res.get("city") else ""))
     print(f"  round trip   {res['latencyMs']} ms")
     _print_checks(res["checks"])
+    return 0 if res["ok"] else 1
+
+
+def cmd_tls(args, store: ProfileStore) -> int:
+    prof = _resolve_or_fail(args, store)
+    if not prof:
+        return 1
+    from .probe import check_tls
+    if not args.json:
+        print(_c(f"Reading '{prof.name}' TLS/HTTP2 handshake...", C.CYN))
+    res = check_tls(prof, store, engine=args.engine)
+    if args.json:
+        print(json.dumps(res))
+        return 0 if res.get("ok") else 1
+    if res.get("error"):
+        print(_c(f"Failed: {res['error']}", C.RED))
+        return 1
+    print(f"  JA3 hash     {res.get('ja3Hash') or '-'}")
+    print(f"  JA4          {res.get('ja4') or '-'}")
+    print(f"  HTTP/2       {res.get('http2') or '-'}")
+    _print_checks(res["checks"])
+    print(_c("\n  Tip: run this on two engines and compare — TLS is the one layer "
+             "JS can't touch.", C.DIM))
     return 0 if res["ok"] else 1
 
 
@@ -591,6 +615,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--engine", help="Test with a different engine than the profile's")
     s.add_argument("--json", action="store_true", help="Print the raw result as JSON")
     s.set_defaults(func=cmd_proxy_test)
+
+    c = sub.add_parser("tls", help="Show the profile's TLS/JA3 handshake fingerprint")
+    c.add_argument("ref")
+    c.add_argument("--engine", help="Read with a different engine than the profile's")
+    c.add_argument("--json", action="store_true", help="Print the raw result as JSON")
+    c.set_defaults(func=cmd_tls)
 
     c = sub.add_parser("trust", help="Score the profile the way a fingerprinter would")
     c.add_argument("ref")

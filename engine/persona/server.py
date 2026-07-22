@@ -417,6 +417,11 @@ def create_app(data_dir: Optional[str] = None):
         _prepare(pid)
         return json.loads(_run_cli("trust", pid, "--json"))
 
+    @app.post("/api/profiles/{pid}/tls")
+    def tls(pid: str):
+        _prepare(pid)
+        return json.loads(_run_cli("tls", pid, "--json", allow_fail=True))
+
     @app.post("/api/profiles/{pid}/warmup")
     def warmup(pid: str, body: Optional[dict] = None):
         d = _prepare(pid)

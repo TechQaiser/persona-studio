@@ -5,7 +5,7 @@ here is the logic that decides *what counts as a problem* — the part that woul
 silently give wrong answers if it broke.
 """
 
-from persona.probe import _is_private, check_leaks
+from persona.probe import _is_private, check_leaks, check_tls
 
 
 def test_private_ipv4_ranges():
@@ -47,6 +47,73 @@ class FakePage:
 class FakeContext:
     def __init__(self, ips):
         self.pages = [FakePage(ips)]
+
+
+# A page that returns a canned TLS parse result, so we exercise check_tls's
+# scoring logic without a browser or the network.
+class FakeTlsPage:
+    def __init__(self, parsed):
+        self._parsed = parsed
+        self.goto_calls = []
+
+    def goto(self, url, **kw):
+        self.goto_calls.append(url)
+
+    def evaluate(self, _js, *args):
+        return self._parsed
+
+
+class FakeTlsContext:
+    def __init__(self, parsed):
+        self.pages = [FakeTlsPage(parsed)]
+
+
+CHROME_TLS = {
+    "ja3": "771,4865-4866-4867,0-23-65281,29-23,0", "ja3Hash": "abc123",
+    "ja4": "t13d1516h2_8daaf6152771_d8a2da3f94cd", "http2": "hash",
+    "grease": True, "greaseKnown": True, "cipherCount": 15,
+}
+
+
+def test_tls_real_chromium_passes_every_check():
+    res = check_tls(None, None, context=FakeTlsContext(CHROME_TLS))
+    assert res["ok"] is True
+    assert res["ja4"].startswith("t13")
+    assert all(c["ok"] for c in res["checks"])
+
+
+def test_tls_flags_a_non_tls13_handshake():
+    bad = {**CHROME_TLS, "ja4": "t12d0810h1_aaaa_bbbb"}
+    res = check_tls(None, None, context=FakeTlsContext(bad))
+    assert not res["ok"]
+    assert any("TLS 1.3" in c["name"] and not c["ok"] for c in res["checks"])
+
+
+def test_tls_flags_missing_http2():
+    bad = {**CHROME_TLS, "ja4": "t13d1516_aaaa_bbbb"}
+    res = check_tls(None, None, context=FakeTlsContext(bad))
+    assert any("HTTP/2" in c["name"] and not c["ok"] for c in res["checks"])
+
+
+def test_tls_flags_missing_grease_when_ciphers_were_exposed():
+    bad = {**CHROME_TLS, "grease": False, "greaseKnown": True}
+    res = check_tls(None, None, context=FakeTlsContext(bad))
+    assert any("GREASE" in c["name"] and not c["ok"] for c in res["checks"])
+
+
+def test_tls_does_not_penalise_grease_when_service_hides_ciphers():
+    # A service that returns only a ja3 string can't reveal GREASE (it's
+    # stripped per spec) — absence must not be scored as a failure.
+    unknown = {**CHROME_TLS, "grease": False, "greaseKnown": False}
+    res = check_tls(None, None, context=FakeTlsContext(unknown))
+    assert not any("GREASE" in c["name"] for c in res["checks"])
+    assert res["grease"] is None
+
+
+def test_tls_reports_error_when_no_service_answers():
+    res = check_tls(None, None, context=FakeTlsContext(None))
+    assert res["ok"] is False
+    assert "error" in res
 
 
 def test_private_addresses_are_not_a_leak():

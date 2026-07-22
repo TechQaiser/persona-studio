@@ -6,6 +6,11 @@ Three questions you want answered *before* an account is on the line:
 ``check_proxy``   Does traffic actually leave through the proxy, and does the
                   exit country/timezone agree with the identity? Needs internet.
 ``check_leaks``   Does WebRTC hand out an IP the proxy was supposed to hide?
+``check_tls``     What does the TLS/HTTP2 handshake look like, and does it read
+                  as a real Chromium? This is the one layer JavaScript can never
+                  touch — a server sees it *before* any page code runs — so it's
+                  the honest test of whether the engine, not the injected script,
+                  is doing the work. Needs internet.
 ``trust_report``  Would this browser pass an inspection right now? Runs the
                   checks a fingerprinting script would run (webdriver, plugins,
                   UA vs platform, WebGL, fonts, canvas stability…) and scores
@@ -31,6 +36,15 @@ IP_ECHO = [
     "https://ipapi.co/json/",
     "https://ipwho.is/",
     "https://api.ipify.org/?format=json",
+]
+
+# Services that reflect the caller's TLS/HTTP2 fingerprint back as JSON. Read
+# through the browser, so it's the browser's real handshake (and proxy) we see.
+# Formats differ, so the parser is defensive; order is by how much they return.
+TLS_ECHO = [
+    "https://tls.peet.ws/api/all",          # ja3 + ja4 + http2, richest
+    "https://check.ja3.zone/",              # {hash, fingerprint}
+    "https://tools.scrapfly.io/api/fp/ja3",  # {ja3, ...}
 ]
 
 # A blank page served from memory. Fingerprinting APIs want a real secure
@@ -132,12 +146,13 @@ def check_proxy(profile: Profile, store: ProfileStore,
                     "proxy": profile.proxy.server if profile.proxy else None,
                     "checks": []}
         leaks = check_leaks(profile, store, context=context, exit_ip=(info or {}).get("ip"))
+        tls = check_tls(profile, store, context=context, engine=engine)
 
     latency = int((time.time() - started) * 1000)
     if not info:
         return {"ok": False, "error": "no IP service answered — is the proxy reachable?",
                 "proxy": profile.proxy.server if profile.proxy else None,
-                "latencyMs": latency, "checks": leaks["checks"]}
+                "latencyMs": latency, "checks": leaks["checks"] + tls["checks"]}
 
     fp = profile.fingerprint
     checks = [_check("Traffic reaches the internet", True,
@@ -159,6 +174,7 @@ def check_proxy(profile: Profile, store: ProfileStore,
             f"profile says {fp.timezone}, the IP looks like {info['timezone']}"))
 
     checks += leaks["checks"]
+    checks += tls["checks"]
     return {
         "ok": all(c["ok"] for c in checks),
         "proxy": profile.proxy.server if profile.proxy else None,
@@ -167,6 +183,126 @@ def check_proxy(profile: Profile, store: ProfileStore,
         "city": info.get("city"),
         "timezone": info.get("timezone"),
         "latencyMs": latency,
+        "ja3Hash": tls.get("ja3Hash"),
+        "ja4": tls.get("ja4"),
+        "checks": checks,
+    }
+
+
+# The echo services don't send CORS headers, so a fetch() from page script is
+# blocked. Navigating the page straight to the endpoint sidesteps that — it's a
+# top-level request, and the handshake is still the browser's real one — then we
+# read the JSON out of the rendered body.
+_TLS_PARSE = """
+() => {
+  const raw = document.body ? document.body.innerText : '';
+  let d;
+  try { d = JSON.parse(raw); } catch (e) { return null; }
+  const tls = d.tls || d;
+  const ja3 = tls.ja3 || d.ja3 || d.fingerprint || null;
+  const ja3Hash = tls.ja3_hash || d.ja3_hash || d.hash || d.ja3_digest || null;
+  const ja4 = tls.ja4 || d.ja4 || (d.ja4_r ? String(d.ja4_r).split('_')[0] : null);
+
+  // Cipher count from the ja3 string's 2nd field (GREASE is stripped there per
+  // spec, so this is the "real" suite count).
+  let cipherCount = 0;
+  if (ja3 && ja3.includes(',')) {
+    cipherCount = (ja3.split(',')[1] || '').split('-').filter(Boolean).length;
+  } else if (tls.ciphers) {
+    cipherCount = tls.ciphers.length;
+  }
+
+  // GREASE (RFC 8701) is stripped from ja3/ja4, so look at the raw response:
+  // services that list ciphers name it ("TLS_GREASE…") or show a 0x?a?a value.
+  // greaseKnown tells us whether the service exposed ciphers at all — if it
+  // only gave a ja3 string, absence of GREASE means nothing.
+  const greaseKnown = /cipher/i.test(raw) || /grease/i.test(raw);
+  const grease = /grease/i.test(raw) || /0x[0-9a-f]a[0-9a-f]a/i.test(raw);
+
+  return {
+    ja3, ja3Hash, ja4,
+    http2: (d.http2 && (d.http2.akamai_fingerprint_hash || d.http2.akamai_fingerprint)) || null,
+    grease, greaseKnown, cipherCount,
+  };
+}
+"""
+
+
+def _read_tls(page) -> Optional[dict]:
+    for url in TLS_ECHO:
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=20000)
+            info = page.evaluate(_TLS_PARSE)
+            if info and (info.get("ja3Hash") or info.get("ja4")):
+                info["source"] = url
+                return info
+        except Exception:
+            continue   # service down or unreachable — try the next
+    return None
+
+
+def check_tls(profile: Profile, store: ProfileStore, context=None,
+              engine: Optional[str] = None) -> dict:
+    """Read the profile's TLS/HTTP2 handshake back from an echo service.
+
+    This is the layer the whole "JS injection isn't enough" argument is about:
+    the TLS ClientHello is sent before the browser has a document, so no page
+    script — ours or an anti-detect browser's — can alter it. What shapes it is
+    the engine's network stack. Chromium-based engines (playwright, patchright,
+    cloak) send Chrome's real handshake because they *are* Chromium; the value
+    of checking is to confirm nothing downstream (a proxy that terminates TLS,
+    an odd build) has changed it into a tell.
+    """
+    def run(ctx):
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        return _read_tls(page)
+
+    info = run(context) if context is not None else None
+    if info is None and context is None:
+        with session(profile, store, engine) as ctx:
+            info = run(ctx)
+
+    if not info:
+        return {"ok": False, "error": "no TLS echo service answered",
+                "checks": [_check("TLS fingerprint readable", False,
+                                  "tls.peet.ws / browserleaks unreachable")]}
+
+    ja4 = info.get("ja4") or ""
+    checks = [_check("TLS handshake reaches a real endpoint", True,
+                     f"JA3 {info['ja3Hash'] or '?'}" + (f" · JA4 {ja4}" if ja4 else ""))]
+
+    # These are the pre-JS tells a server-side detector reads before any page
+    # script runs. A real modern browser negotiates TLS 1.3 and HTTP/2; a
+    # scripted TLS client (python, go, a misconfigured impersonator) usually
+    # can't reproduce both. JA4's first block encodes exactly this ("t13…h2").
+    if ja4:
+        checks.append(_check(
+            "Negotiates TLS 1.3 (browser-grade)", ja4.startswith("t13"),
+            f"JA4 starts '{ja4[:4]}', not 't13'"))
+        checks.append(_check(
+            "Speaks HTTP/2 like a browser", "h2" in ja4.split("_")[0],
+            "no h2 in the ALPN — browsers negotiate it, most scripts don't"))
+
+    # GREASE is Chrome/Chromium's signature (RFC 8701). Only assert it when the
+    # service actually exposed the cipher list — otherwise its absence is just
+    # the ja3 spec stripping it, not a real finding.
+    if info.get("greaseKnown"):
+        checks.append(_check(
+            "Sends GREASE like a real Chrome", bool(info.get("grease")),
+            "no GREASE values — this isn't a stock Chromium ClientHello"))
+
+    if info.get("cipherCount"):
+        checks.append(_check(
+            "Cipher suite list is browser-shaped", info["cipherCount"] >= 10,
+            f"only {info['cipherCount']} suite(s); real Chrome offers ~15"))
+
+    return {
+        "ok": all(c["ok"] for c in checks),
+        "ja3": info.get("ja3"),
+        "ja3Hash": info.get("ja3Hash"),
+        "ja4": info.get("ja4"),
+        "http2": info.get("http2"),
+        "grease": info.get("grease") if info.get("greaseKnown") else None,
         "checks": checks,
     }
 

@@ -40,7 +40,17 @@ persona serve                  # run the HTTP API the dashboard talks to
 ```bash
 persona trust acct-01            # score it the way a fingerprinting script would
 persona proxy test acct-01       # exit IP, country, timezone match + WebRTC leaks
+persona tls acct-01              # the TLS/JA3 handshake — the one layer JS can't touch
 ```
+
+`tls` reads the profile's own TLS/HTTP2 handshake back from an echo service and
+reports its **JA3** and **JA4** fingerprints. This is the layer the whole
+"JS injection isn't enough" argument is really about: a server sees the TLS
+ClientHello *before* the browser has a document, so no page script — yours or an
+anti-detect browser's — can change it. Run it on two engines and compare the
+JA3/JA4 side by side to see, rather than argue, what each engine actually sends.
+(Chromium engines send Chrome's real handshake because they *are* Chromium; the
+check confirms nothing downstream turned it into a tell.)
 
 `trust` opens the profile and runs the checks a real fingerprinter runs —
 `navigator.webdriver`, plugins, UA vs platform, WebGL, timezone, font probing,
@@ -121,6 +131,7 @@ dashboard uses to manage and launch profiles for real. It listens on
 | POST | `/api/profiles/{id}/cookies` | Import cookies (`text` or `cookies`, plus `clear`) |
 | POST | `/api/profiles/{id}/proxy-test` | Exit IP, country and WebRTC leak check |
 | POST | `/api/profiles/{id}/trust` | Trust score + the individual checks |
+| POST | `/api/profiles/{id}/tls` | TLS/JA3/JA4 handshake fingerprint |
 | POST | `/api/profiles/{id}/warmup` | Start a background warm-up (`minutes`) |
 | POST | `/api/profiles/bulk` | Apply one `patch` to many `ids` |
 | POST | `/api/fingerprint/validate` | Coherence check a fingerprint |
