@@ -11,7 +11,13 @@ Command-line interface for Persona.
     persona export <name|id> <file>
     persona import <file>
     persona check <name|id>                       (validate fingerprint coherence)
+    persona trust <name|id>                       (score it like a fingerprinter would)
+    persona proxy test <name|id>                  (exit IP, country + WebRTC leaks)
     persona cookies list|export|import <name|id>  (move a session in or out)
+    persona ext list|add|remove <name|id> [path]  (browser extensions)
+    persona warmup <name|id> [--minutes]          (age a fresh profile by browsing)
+    persona attach <name|id> [--port]             (open it for Selenium/Puppeteer/Playwright)
+    persona apply [refs] [--tag|--all] --engine …  (one change, many profiles)
     persona engines                               (list launch engines + install status)
     persona default-engine [name]                 (show/set the engine new profiles use)
     persona serve [--host] [--port]               (run the HTTP API for the dashboard)
@@ -20,6 +26,7 @@ Command-line interface for Persona.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Optional
@@ -262,6 +269,175 @@ def cmd_cookies_import(args, store: ProfileStore) -> int:
     return 0
 
 
+def _print_checks(checks: list[dict]) -> None:
+    for c in checks:
+        mark = _c("PASS", C.GRN) if c["ok"] else _c("FAIL", C.RED)
+        print(f"  [{mark}] {c['name']}")
+        if c.get("detail") and not c["ok"]:
+            print(f"         {_c(c['detail'], C.DIM)}")
+
+
+def cmd_proxy_test(args, store: ProfileStore) -> int:
+    prof = _resolve_or_fail(args, store)
+    if not prof:
+        return 1
+    from .probe import check_proxy
+    where = prof.proxy.server if prof.proxy else "no proxy (direct connection)"
+    if not args.json:
+        print(_c(f"Testing '{prof.name}' via {where}...", C.CYN))
+    res = check_proxy(prof, store, engine=args.engine)
+    if args.json:
+        print(json.dumps(res))
+        return 0 if res.get("ok") else 1
+    if res.get("error"):
+        print(_c(f"Failed: {res['error']}", C.RED))
+        return 1
+    print(f"  exit IP      {res['ip']}"
+          + (f"  ({res['city']}, {res['country']})" if res.get("city") else ""))
+    print(f"  round trip   {res['latencyMs']} ms")
+    _print_checks(res["checks"])
+    return 0 if res["ok"] else 1
+
+
+def cmd_trust(args, store: ProfileStore) -> int:
+    prof = _resolve_or_fail(args, store)
+    if not prof:
+        return 1
+    from .probe import trust_report
+    if not args.json:
+        print(_c(f"Inspecting '{prof.name}' the way a fingerprinting script would...", C.CYN))
+    rep = trust_report(prof, store, engine=args.engine)
+    if args.json:
+        print(json.dumps(rep))
+        return 0
+    colour = C.GRN if rep["score"] >= 95 else C.YEL if rep["score"] >= 70 else C.RED
+    print(_c(f"\n  Trust score: {rep['score']}%  (grade {rep['grade']}, "
+             f"{rep['passed']}/{rep['total']} checks)\n", colour))
+    _print_checks(rep["checks"])
+    return 0 if rep["score"] == 100 else 1
+
+
+def cmd_warmup(args, store: ProfileStore) -> int:
+    prof = _resolve_or_fail(args, store)
+    if not prof:
+        return 1
+    from .warmup import warm_up
+    print(_c(f"Warming up '{prof.name}' for {args.minutes} minute(s)...", C.CYN))
+    res = warm_up(prof, store, minutes=args.minutes, sites=args.site or None,
+                  engine=args.engine, headless=args.headless, on_event=print)
+    print(_c(f"Done — visited {res['pages']} page(s)"
+             + (f", {res['errors']} unreachable" if res["errors"] else "") + ".", C.GRN))
+    return 0
+
+
+def cmd_attach(args, store: ProfileStore) -> int:
+    prof = _resolve_or_fail(args, store)
+    if not prof:
+        return 1
+    from .automation import attach, snippets
+    print(_c(f"Launching '{prof.name}' with DevTools on port {args.port}...", C.CYN))
+    (pw, context, page), info = attach(prof, store, port=args.port, engine=args.engine)
+    ws = info.get("webSocketDebuggerUrl", "")
+    print(_c(f"\n  {info.get('Browser', 'Browser')} ready — attach your automation:", C.B))
+    print(snippets(args.port, ws))
+    print(_c("Close the browser window (or press Ctrl+C) to end the session.", C.DIM))
+    try:
+        page.wait_for_event("close", timeout=0)
+    except KeyboardInterrupt:
+        print("\nClosing.")
+    finally:
+        try:
+            context.close()
+        finally:
+            if pw:
+                pw.stop()
+    return 0
+
+
+def cmd_ext(args, store: ProfileStore) -> int:
+    prof = _resolve_or_fail(args, store)
+    if not prof:
+        return 1
+    if args.ext_command == "list":
+        if not prof.extensions:
+            print(_c(f"'{prof.name}' loads no extensions.", C.DIM))
+            return 0
+        print(_c(f"Extensions for '{prof.name}':", C.B))
+        for path in prof.extensions:
+            exists = Path(path).expanduser().is_dir()
+            note = "" if exists else _c("  (folder not found)", C.RED)
+            print(f"  {path}{note}")
+        return 0
+
+    path = str(Path(args.path).expanduser())
+    if args.ext_command == "add":
+        if not Path(path).is_dir():
+            print(_c(f"'{path}' is not a folder. Point at an *unpacked* extension "
+                     f"(the folder containing manifest.json).", C.RED))
+            return 1
+        if path in prof.extensions:
+            print(_c("Already loaded.", C.DIM))
+            return 0
+        prof.extensions.append(path)
+    else:  # remove
+        if path not in prof.extensions:
+            print(_c(f"'{path}' isn't on this profile.", C.RED))
+            return 1
+        prof.extensions.remove(path)
+    store.save(prof)
+    print(_c(f"{'Added' if args.ext_command == 'add' else 'Removed'} — "
+             f"'{prof.name}' now loads {len(prof.extensions)} extension(s).", C.GRN))
+    return 0
+
+
+def cmd_apply(args, store: ProfileStore) -> int:
+    from .bulk import apply_patch, select
+    targets = select(store.list(), refs=args.ref, tag=args.tag, everything=args.all)
+    if not targets:
+        print(_c("Nothing matched. Pass profile names/ids, --tag TAG, or --all.", C.RED))
+        return 1
+
+    patch: dict = {}
+    for key in ("engine", "notes", "locale", "timezone"):
+        if getattr(args, key) is not None:
+            patch[key] = getattr(args, key)
+    if args.startup_url:
+        patch["startup_urls"] = args.startup_url
+    if args.add_tag:
+        patch["add_tags"] = args.add_tag
+    if args.remove_tag:
+        patch["remove_tags"] = args.remove_tag
+    if args.regen:
+        patch["regen"] = True
+    if args.proxy is not None:
+        patch["proxy"] = _parse_proxy(args.proxy, args.country) if args.proxy else None
+    if not patch:
+        print(_c("No changes given. Try --engine, --proxy, --locale, --add-tag, --regen…", C.RED))
+        return 1
+
+    if not args.yes:
+        print(_c(f"About to change {len(targets)} profile(s):", C.B))
+        for p in targets[:10]:
+            print(f"  {p.name}")
+        if len(targets) > 10:
+            print(_c(f"  … and {len(targets) - 10} more", C.DIM))
+        if input("Continue? (y/N) ").strip().lower() != "y":
+            print("Aborted.")
+            return 0
+
+    touched = 0
+    for prof in targets:
+        changed = apply_patch(prof, patch)
+        if changed:
+            store.save(prof)
+            touched += 1
+            print(f"  {prof.name:<24}{_c(', '.join(changed), C.DIM)}")
+    if patch.get("engine"):
+        store.set_default_engine(patch["engine"])   # "last engine wins"
+    print(_c(f"Updated {touched} of {len(targets)} profile(s).", C.GRN))
+    return 0
+
+
 def cmd_serve(args, store: ProfileStore) -> int:
     from .server import serve
     serve(host=args.host, port=args.port, data_dir=args.data_dir)
@@ -407,6 +583,64 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("check", help="Validate fingerprint coherence")
     c.add_argument("ref")
     c.set_defaults(func=cmd_check)
+
+    c = sub.add_parser("proxy", help="Proxy tools")
+    px = c.add_subparsers(dest="proxy_command", required=True)
+    s = px.add_parser("test", help="Check the exit IP, country and WebRTC leaks")
+    s.add_argument("ref")
+    s.add_argument("--engine", help="Test with a different engine than the profile's")
+    s.add_argument("--json", action="store_true", help="Print the raw result as JSON")
+    s.set_defaults(func=cmd_proxy_test)
+
+    c = sub.add_parser("trust", help="Score the profile the way a fingerprinter would")
+    c.add_argument("ref")
+    c.add_argument("--engine", help="Inspect with a different engine than the profile's")
+    c.add_argument("--json", action="store_true", help="Print the raw result as JSON")
+    c.set_defaults(func=cmd_trust)
+
+    c = sub.add_parser("warmup", help="Browse normally for a while to age the profile")
+    c.add_argument("ref")
+    c.add_argument("--minutes", type=float, default=5, help="How long to browse (default: 5)")
+    c.add_argument("--site", action="append",
+                   help="Site to visit (repeatable; replaces the default list)")
+    c.add_argument("--headless", action="store_true")
+    c.add_argument("--engine")
+    c.set_defaults(func=cmd_warmup)
+
+    c = sub.add_parser("attach", help="Open the profile with DevTools for your own automation")
+    c.add_argument("ref")
+    c.add_argument("--port", type=int, default=9222, help="DevTools port (default: 9222)")
+    c.add_argument("--engine")
+    c.set_defaults(func=cmd_attach)
+
+    c = sub.add_parser("ext", help="Manage a profile's browser extensions")
+    ex = c.add_subparsers(dest="ext_command", required=True)
+    s = ex.add_parser("list", help="Show the extensions this profile loads")
+    s.add_argument("ref")
+    s.set_defaults(func=cmd_ext)
+    for verb, helptext in (("add", "Load an unpacked extension folder"),
+                           ("remove", "Stop loading an extension")):
+        s = ex.add_parser(verb, help=helptext)
+        s.add_argument("ref"); s.add_argument("path")
+        s.set_defaults(func=cmd_ext)
+
+    c = sub.add_parser("apply", help="Apply one change to many profiles at once")
+    c.add_argument("ref", nargs="*", help="Profile names or ids")
+    c.add_argument("--tag", help="Every profile carrying this tag")
+    c.add_argument("--all", action="store_true", help="Every profile")
+    c.add_argument("--engine", help="Switch them to this launch engine")
+    c.add_argument("--proxy", help="scheme://[user:pass@]host:port  (empty string = go direct)")
+    c.add_argument("--country", help="ISO code to align locale/timezone with the proxy")
+    c.add_argument("--locale", help="Locale (also moves timezone + languages)")
+    c.add_argument("--timezone")
+    c.add_argument("--notes")
+    c.add_argument("--startup-url", action="append", help="Startup URL (repeatable, replaces)")
+    c.add_argument("--add-tag", action="append")
+    c.add_argument("--remove-tag", action="append")
+    c.add_argument("--regen", action="store_true",
+                   help="Give each one a fresh fingerprint (same OS, locale and session)")
+    c.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
+    c.set_defaults(func=cmd_apply)
 
     c = sub.add_parser("serve", help="Run the HTTP API for the dashboard")
     c.add_argument("--host", default="127.0.0.1")

@@ -36,6 +36,9 @@ returns launch handles (``keep_open=True``) or blocks until the window closes
 from __future__ import annotations
 
 import importlib.util
+from contextlib import contextmanager
+from dataclasses import replace
+from pathlib import Path
 from typing import Callable, Optional
 
 from . import fingerprint as fp_mod
@@ -57,6 +60,21 @@ def _open_startup_urls(context, page, profile: Profile) -> None:
             target.goto(url, wait_until="domcontentloaded", timeout=30000)
         except Exception:
             continue  # unreachable site / typo — don't crash the session
+
+
+def _extension_args(profile: Profile) -> list[str]:
+    """Chromium flags that load the profile's unpacked extensions.
+
+    Both flags are required: ``--load-extension`` alone still leaves every other
+    extension enabled, which would leak identity between profiles.
+    """
+    paths = [str(Path(p).expanduser().resolve())
+             for p in (getattr(profile, "extensions", None) or [])]
+    paths = [p for p in paths if Path(p).is_dir()]
+    if not paths:
+        return []
+    joined = ",".join(paths)
+    return [f"--disable-extensions-except={joined}", f"--load-extension={joined}"]
 
 
 def register(name: str, requires: Optional[str] = None):
@@ -95,17 +113,51 @@ def get(name: str) -> Callable:
     return _DRIVERS[name]["fn"]
 
 
+@contextmanager
+def session(profile: Profile, store, engine: Optional[str] = None,
+            headless: bool = True):
+    """Open a profile's persistent session and yield its browser context.
+
+    This is the entry point for the tools that *inspect* a profile rather than
+    hand it to a user — cookie transfer, the proxy/leak test, the trust report.
+    Startup URLs are stripped: these callers want the identity, not a browsing
+    session. The context is always closed on the way out, which is also what
+    flushes cookies to disk.
+    """
+    name = engine or profile.engine or "playwright"
+    quiet = replace(profile, startup_urls=[])
+
+    if name == "camoufox":
+        # Camoufox's driver is launch-and-wait only, so open it directly.
+        from camoufox.sync_api import Camoufox
+        with Camoufox(headless=headless, persistent_context=True,
+                      user_data_dir=str(store.user_data_path(profile.id))) as browser:
+            yield browser
+        return
+
+    handles = get(name)(quiet, store, headless=headless, keep_open=True)
+    pw, context, _page = handles
+    try:
+        yield context
+    finally:
+        context.close()
+        if pw:
+            pw.stop()
+
+
 # --------------------------------------------------------------------------
 # Shared Playwright-style launch (used by both playwright and patchright).
 # --------------------------------------------------------------------------
 def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: bool,
-                            keep_open: bool):
+                            keep_open: bool, extra_args=None):
     fp = profile.fingerprint
     launch_args = [
         f"--window-size={fp.viewport_width},{fp.viewport_height}",
         "--disable-blink-features=AutomationControlled",
         "--no-first-run",
         "--no-default-browser-check",
+        *_extension_args(profile),
+        *(extra_args or []),
     ]
     context_opts: dict = {
         "user_agent": fp.user_agent,
@@ -154,20 +206,20 @@ def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: 
 
 
 @register("playwright", requires="playwright")
-def _driver_playwright(profile, store, headless=False, keep_open=True):
+def _driver_playwright(profile, store, headless=False, keep_open=True, extra_args=None):
     from playwright.sync_api import sync_playwright
-    return _launch_playwright_like(sync_playwright, profile, store, headless, keep_open)
+    return _launch_playwright_like(sync_playwright, profile, store, headless, keep_open, extra_args)
 
 
 @register("patchright", requires="patchright")
-def _driver_patchright(profile, store, headless=False, keep_open=True):
+def _driver_patchright(profile, store, headless=False, keep_open=True, extra_args=None):
     # Patchright is an API-compatible, patched drop-in for Playwright.
     from patchright.sync_api import sync_playwright
-    return _launch_playwright_like(sync_playwright, profile, store, headless, keep_open)
+    return _launch_playwright_like(sync_playwright, profile, store, headless, keep_open, extra_args)
 
 
 @register("camoufox", requires="camoufox")
-def _driver_camoufox(profile, store, headless=False, keep_open=True):
+def _driver_camoufox(profile, store, headless=False, keep_open=True, extra_args=None):
     """Camoufox (patched Firefox) generates its own coherent fingerprint; we feed
     it the profile's OS/locale/proxy as hints and keep the persistent session."""
     if keep_open:
@@ -199,7 +251,7 @@ def _driver_camoufox(profile, store, headless=False, keep_open=True):
 
 
 @register("cloak", requires="cloakbrowser")
-def _driver_cloak(profile, store, headless=False, keep_open=True):
+def _driver_cloak(profile, store, headless=False, keep_open=True, extra_args=None):
     """CloakBrowser — a patched Chromium binary whose fingerprints are altered at
     the C++ source level. Persona feeds it the profile's identity + proxy and keeps
     the persistent session; the binary does the heavy stealth work (its own
@@ -223,7 +275,8 @@ def _driver_cloak(profile, store, headless=False, keep_open=True):
         # Chromium show a local "unsupported command-line flag" infobar. --test-type
         # hides that purely-cosmetic bar; it isn't visible to websites (JS can't
         # read command-line flags), so it doesn't affect the fingerprint.
-        args=["--test-type", "--no-first-run", "--no-default-browser-check"],
+        args=["--test-type", "--no-first-run", "--no-default-browser-check",
+              *_extension_args(profile), *(extra_args or [])],
     )
     page = context.pages[0] if context.pages else context.new_page()
     _open_startup_urls(context, page, profile)

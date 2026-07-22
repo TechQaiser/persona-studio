@@ -35,6 +35,50 @@ persona import acct-01.json
 persona serve                  # run the HTTP API the dashboard talks to
 ```
 
+### Inspecting a profile
+
+```bash
+persona trust acct-01            # score it the way a fingerprinting script would
+persona proxy test acct-01       # exit IP, country, timezone match + WebRTC leaks
+```
+
+`trust` opens the profile and runs the checks a real fingerprinter runs —
+`navigator.webdriver`, plugins, UA vs platform, WebGL, timezone, font probing,
+media devices, and whether canvas reads the same twice. It grades the *browser*,
+not the config; `persona check` grades the config. Add `--json` to either for
+machine-readable output.
+
+`proxy test` needs internet: it routes a real request through the profile and
+reports where it came out, then asks WebRTC whether it would give away an
+address the proxy was meant to hide. It works without a proxy too — that's your
+baseline.
+
+### Extensions, warm-up, automation
+
+```bash
+persona ext add acct-01 ./ublock        # unpacked folder (the one with manifest.json)
+persona ext list acct-01
+persona warmup acct-01 --minutes 10     # browse normally so the session isn't brand-new
+persona attach acct-01 --port 9222      # open it for Selenium / Puppeteer / Playwright
+```
+
+`attach` launches the profile with the DevTools protocol listening and prints
+ready-to-paste snippets. Your automation drives *that* browser, so the identity,
+proxy and session stay exactly as Persona set them up — a browser started by
+Selenium itself would have none of them.
+
+### Changing many profiles at once
+
+```bash
+persona apply --tag client-a --engine cloak        # move a whole set to CloakBrowser
+persona apply --all --locale de-DE                 # locale, timezone and languages together
+persona apply acct-01 acct-02 --add-tag q3 --regen # fresh fingerprints, same accounts
+persona apply --tag old --proxy "" -y              # "" means go direct
+```
+
+Only the flags you pass are changed — everything else is left alone, so the same
+command is safe to run again later for one more tweak.
+
 ### Cookies
 
 Move a logged-in session between machines, or seed a fresh profile with one you
@@ -75,6 +119,10 @@ dashboard uses to manage and launch profiles for real. It listens on
 | POST | `/api/profiles/{id}/stop` | Close a running profile |
 | GET | `/api/profiles/{id}/cookies` | Read the profile's cookie jar |
 | POST | `/api/profiles/{id}/cookies` | Import cookies (`text` or `cookies`, plus `clear`) |
+| POST | `/api/profiles/{id}/proxy-test` | Exit IP, country and WebRTC leak check |
+| POST | `/api/profiles/{id}/trust` | Trust score + the individual checks |
+| POST | `/api/profiles/{id}/warmup` | Start a background warm-up (`minutes`) |
+| POST | `/api/profiles/bulk` | Apply one `patch` to many `ids` |
 | POST | `/api/fingerprint/validate` | Coherence check a fingerprint |
 
 ## Python API
@@ -100,6 +148,10 @@ store.save(profile)
 | `models.py` | `Fingerprint`, `Proxy`, `Profile` data models |
 | `store.py` | JSON-per-profile persistence + user-data dirs |
 | `cookies.py` | Cookie import/export across the formats people actually have |
+| `probe.py` | Proxy/leak test and the trust report a fingerprinter would produce |
+| `bulk.py` | Multi-profile synchroniser: one patch, applied to many |
+| `warmup.py` | Human-paced browsing that gives a fresh profile a past |
+| `automation.py` | CDP attach so Selenium/Puppeteer/Playwright can drive a profile |
 | `stealth.py` | Generates the page-level JS patch for a fingerprint |
 | `launcher.py` | Thin dispatcher: picks the profile's engine and hands off |
 | `drivers.py` | Pluggable launch backends (cloak / camoufox / patchright / playwright) |

@@ -5,6 +5,32 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Fingerprint trust checker** (`persona trust`, `probe.py`): opens the profile
+  and runs the checks a fingerprinting script runs — webdriver, plugins, UA vs
+  platform, WebGL, timezone, font probing, media devices, canvas stability — then
+  scores the result. Grades the real browser, where `persona check` grades the
+  config. Also `POST /api/profiles/{id}/trust` and a button in the dashboard.
+- **Proxy tester + WebRTC leak checker** (`persona proxy test`): routes a real
+  request through the profile, reports the exit IP/country/timezone and whether
+  they agree with the identity, then checks whether WebRTC exposes an address the
+  proxy was meant to hide. Wires up the dashboard's "Test connection" button.
+- **Multi-profile synchroniser** (`persona apply`, `bulk.py`): one change applied
+  to many profiles, selected by name, `--tag` or `--all`. Unmentioned fields are
+  left alone; changing the locale moves timezone and languages with it. Exposed as
+  `POST /api/profiles/bulk` and "Edit all" in the dashboard's selection bar.
+- **Account warm-up** (`persona warmup`, `warmup.py`): browses ordinary sites at
+  human pace so a fresh profile doesn't arrive with an empty history.
+- **Local automation API** (`persona attach`, `automation.py`): launches the
+  profile with the DevTools protocol open and prints connect snippets, so
+  Selenium/Puppeteer/Playwright drive *that* browser — identity, proxy and
+  session intact.
+- **Extensions manager**: per-profile unpacked extensions (`persona ext
+  add|list|remove`, `Profile.extensions`, dashboard field). Only the profile's own
+  extensions load, so nothing carries between profiles.
+- **More fingerprint signals**: per-OS installed fonts (answered by
+  `document.fonts.check`), camera/microphone counts via `enumerateDevices` with
+  seeded stable ids, sub-pixel ClientRects jitter, and seeded audio noise. Fonts
+  and media counts are covered by `validate()` too.
 - **Cookie import/export** (`persona/cookies.py`): move a logged-in session
   between machines or seed a fresh profile with one you already have. Reads
   Cookie-Editor / EditThisCookie JSON, Playwright storage state and Netscape
@@ -40,6 +66,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - `launcher.py` is now a thin dispatcher over `drivers.py`.
 
 ### Fixed
+- **Canvas and audio noise are now stable across reads.** Both drew from a single
+  advancing PRNG and mutated the caller's canvas/buffer in place, so reading the
+  same canvas twice gave different bytes — itself a detection signal (CreepJS
+  checks for exactly this). Each source now restarts from the profile seed and
+  works on a copy.
+- **`enumerateDevices` spoofing actually applies.** It was building device objects
+  with `Object.assign` against getter-only `MediaDeviceInfo` properties, which
+  threw and silently fell back to Chromium's real list. Found by the new trust
+  checker.
 - **Startup URLs are now opened** on launch (first in the main tab, the rest in
   new tabs) instead of always landing on `about:blank`.
 - **Launch button no longer sticks on "running"** after you close the browser

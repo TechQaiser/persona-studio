@@ -105,6 +105,44 @@ COUNTRY_TO_LOCALE = {
     "IN": "en-IN", "DE": "de-DE", "FR": "fr-FR", "ES": "es-ES", "TR": "tr-TR",
 }
 
+# Fonts that actually ship with each OS. Font-probing is a classic fingerprint
+# vector — a "Windows" browser that can render Helvetica Neue but not Segoe UI
+# is a giveaway — so each archetype carries its own realistic set.
+FONTS = {
+    "windows": [
+        "Arial", "Arial Black", "Bahnschrift", "Calibri", "Cambria", "Candara",
+        "Comic Sans MS", "Consolas", "Constantia", "Corbel", "Courier New",
+        "Ebrima", "Franklin Gothic Medium", "Gabriola", "Gadugi", "Georgia",
+        "Impact", "Ink Free", "Lucida Console", "Lucida Sans Unicode",
+        "Malgun Gothic", "Microsoft Sans Serif", "MS Gothic", "MV Boli",
+        "Nirmala UI", "Palatino Linotype", "Segoe Print", "Segoe Script",
+        "Segoe UI", "SimSun", "Sylfaen", "Symbol", "Tahoma", "Times New Roman",
+        "Trebuchet MS", "Verdana", "Webdings", "Wingdings",
+    ],
+    "macos": [
+        "American Typewriter", "Andale Mono", "Arial", "Arial Black",
+        "Avenir", "Avenir Next", "Baskerville", "Big Caslon", "Bodoni 72",
+        "Bradley Hand", "Chalkboard", "Chalkduster", "Cochin", "Comic Sans MS",
+        "Copperplate", "Courier", "Courier New", "Didot", "Futura", "Geneva",
+        "Georgia", "Gill Sans", "Helvetica", "Helvetica Neue", "Herculanum",
+        "Hoefler Text", "Impact", "Lucida Grande", "Luminari", "Marker Felt",
+        "Menlo", "Monaco", "Optima", "Palatino", "Papyrus", "Phosphate",
+        "Rockwell", "SF Pro", "Skia", "Snell Roundhand", "Times", "Times New Roman",
+        "Trattatello", "Trebuchet MS", "Verdana", "Zapfino",
+    ],
+    "linux": [
+        "Bitstream Charter", "Cantarell", "Century Schoolbook L", "Courier 10 Pitch",
+        "DejaVu Sans", "DejaVu Sans Mono", "DejaVu Serif", "FreeMono", "FreeSans",
+        "FreeSerif", "Liberation Mono", "Liberation Sans", "Liberation Serif",
+        "Nimbus Mono PS", "Nimbus Roman", "Nimbus Sans", "Noto Sans", "Noto Serif",
+        "Ubuntu", "Ubuntu Condensed", "Ubuntu Mono", "URW Bookman", "URW Gothic",
+    ],
+    "android": [
+        "Droid Sans Mono", "Noto Color Emoji", "Noto Sans", "Noto Serif",
+        "Roboto", "Roboto Condensed", "Roboto Mono",
+    ],
+}
+
 # The four desktop-capable operating systems we generate by default.
 DESKTOP_OS = ["windows", "macos", "linux"]
 ALL_OS = ["windows", "macos", "linux", "android"]

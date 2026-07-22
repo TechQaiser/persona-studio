@@ -151,7 +151,7 @@ function mk(name, folder, status, os, tags, country) {
     locale, timezone: LOCALES[locale], geo: "Prompt",
     mediaVideo: 1, mediaAudio: 1, dnt: false,
     proxy: country ? { type: "HTTP", host: "res-" + country.toLowerCase() + ".proxy.io", port: "8080", user: "u" + name.length, pass: "•••••", country } : null,
-    notes: "", startupUrls: "",
+    notes: "", startupUrls: "", extensions: "",
     lastActive: status === "running" ? "now" : ["2h ago", "yesterday", "3d ago"][name.length % 3],
   };
 }
@@ -170,6 +170,7 @@ export default function App() {
   const [sel, setSel] = useState(new Set());
   const [editor, setEditor] = useState(null);
   const [bulk, setBulk] = useState(false);
+  const [sync, setSync] = useState(false);   // "edit all selected" modal
   const [mode, setMode] = useState("connecting");   // connecting | live | demo
   const [engines, setEngines] = useState(null);      // {name: installed} from API
   const [defaultEngine, setDefaultEngine] = useState(ENGINE_ORDER[0]); // new-profile default
@@ -200,10 +201,10 @@ export default function App() {
     if (!live) return;
     let cancelled = false;
     const id = setInterval(() => {
-      if (!cancelled && !editor && !bulk) refresh().catch(() => {});
+      if (!cancelled && !editor && !bulk && !sync) refresh().catch(() => {});
     }, 3000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [live, editor, bulk]);
+  }, [live, editor, bulk, sync]);
 
   const filtered = useMemo(() =>
     profiles.filter(p =>
@@ -310,7 +311,7 @@ export default function App() {
           </div>
 
           {view === "profiles" && (
-            <ProfilesView {...{ filtered, query, setQuery, folder, sel, setSel, toggleSel, allSel, toggleRun, clone, remove, setEditor, setProfiles, live, refresh }} />
+            <ProfilesView {...{ filtered, query, setQuery, folder, sel, setSel, toggleSel, allSel, toggleRun, clone, remove, setEditor, setProfiles, setSync, live, refresh }} />
           )}
           {view === "engines" && <EnginesView engines={engines} live={live} />}
           {view === "proxies" && <ProxiesView profiles={profiles} />}
@@ -319,6 +320,23 @@ export default function App() {
       </div>
 
       {editor && <Editor profile={editor} live={live} onClose={() => setEditor(null)} onSave={(p) => { save(p); setEditor(null); }} />}
+      {sync && <SyncModal ids={[...sel]} onClose={() => setSync(false)} onApply={async (patch) => {
+        const ids = [...sel];
+        if (live) {
+          try { await api.bulkUpdate(ids, patch); await refresh(); }
+          catch (e) { alert("Bulk edit failed: " + e.message); }
+        } else {
+          const { addTags, ...fields } = patch;
+          setProfiles(ps => ps.map(p => !ids.includes(p.id) ? p : {
+            ...p, ...fields,
+            timezone: patch.locale ? LOCALES[patch.locale] : p.timezone,
+            tags: addTags ? [...new Set([...p.tags, ...addTags])] : p.tags,
+          }));
+        }
+        if (patch.engine) setDefaultEngine(patch.engine);
+        setSel(new Set());
+        setSync(false);
+      }} />}
       {bulk && <BulkModal onClose={() => setBulk(false)} folder={folder} onCreate={async (list) => {
         if (live) { for (const p of list) { try { await api.create({ ...p, id: undefined, _new: true }); } catch {} } await refresh(); }
         else { setProfiles(ps => [...ps, ...list]); }
@@ -329,7 +347,7 @@ export default function App() {
 }
 
 /* ---- Profiles view ----------------------------------------------- */
-function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSel, allSel, toggleRun, clone, remove, setEditor, setProfiles, live, refresh }) {
+function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSel, allSel, toggleRun, clone, remove, setEditor, setProfiles, setSync, live, refresh }) {
   return (
     <>
       <div className="ps-toolbar">
@@ -343,6 +361,7 @@ function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSe
           <div className="ps-bulkbar">
             <span>{sel.size} selected</span>
             <button onClick={() => { sel.forEach(toggleRun); setSel(new Set()); }}><Play size={13} /> Launch</button>
+            <button onClick={() => setSync(true)}><Copy size={13} /> Edit all</button>
             <button className="danger" onClick={async () => { const ids = [...sel]; setSel(new Set()); if (live) { for (const id of ids) { try { await api.remove(id); } catch {} } await refresh(); } else { setProfiles(ps => ps.filter(p => !ids.includes(p.id))); } }}><Trash2 size={13} /> Delete</button>
           </div>
         )}
@@ -534,9 +553,46 @@ function newProfile(folder, defaultEngine = ENGINE_ORDER[0]) {
     webglVendor: "Google Inc. (NVIDIA)", webglRenderer: GPUS[os][0],
     canvas: "Noise", webrtc: "Altered", audio: "Noise", fonts: "Masked",
     locale: "en-US", timezone: "America/New_York", geo: "Prompt",
-    mediaVideo: 1, mediaAudio: 1, dnt: false, proxy: null, notes: "", startupUrls: "",
+    mediaVideo: 1, mediaAudio: 1, dnt: false, proxy: null, notes: "", startupUrls: "", extensions: "",
     lastActive: "never", _new: true,
   };
+}
+
+/* ---- Probe result panel (proxy test / trust check) ---------------- */
+function ProbePanel({ probe, kind }) {
+  if (!probe || probe.kind !== kind) return null;
+  if (probe.state === "running")
+    return <div className="ps-hint"><RefreshCw size={12} className="ps-spin" /> Opening the profile in the background — this takes a few seconds.</div>;
+  if (probe.state === "error")
+    return <div className="ps-hint"><ShieldAlert size={12} /> {probe.data}</div>;
+
+  const d = probe.data || {};
+  const checks = d.checks || [];
+  return (
+    <div className="ps-probe">
+      {d.score !== undefined && (
+        <div className="ps-probe-head">
+          <span className="ps-probe-score" style={{ color: d.score >= 95 ? T.mint : d.score >= 70 ? T.amber : T.red }}>
+            {d.score}%
+          </span>
+          <span>grade {d.grade} · {d.passed}/{d.total} checks passed</span>
+        </div>
+      )}
+      {d.ip && (
+        <div className="ps-probe-head">
+          <span className="ps-probe-score" style={{ color: T.mint, fontSize: 15 }}>{d.ip}</span>
+          <span>{[d.city, d.country].filter(Boolean).join(", ")}{d.latencyMs ? ` · ${d.latencyMs} ms` : ""}</span>
+        </div>
+      )}
+      {d.error && <div className="ps-check">{d.error}</div>}
+      {checks.map((c, i) => (
+        <div key={i} className={"ps-check" + (c.ok ? " ok" : "")}>
+          {c.ok ? <Check size={12} /> : <X size={12} />}
+          <span>{c.name}{!c.ok && c.detail ? <em> — {c.detail}</em> : null}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 /* ---- Fingerprint editor ------------------------------------------ */
@@ -571,6 +627,15 @@ function Editor({ profile, live, onClose, onSave }) {
       setCkMsg(`Exported ${cookies.length} cookie${cookies.length === 1 ? "" : "s"}.`);
     } catch (e) { setCkMsg("Export failed: " + e.message); }
     setCkBusy("");
+  };
+
+  // Probes and warm-up all open the profile headlessly, so they share one
+  // "something is running" flag and one result panel per tab.
+  const [probe, setProbe] = useState(null);     // { kind, state, data }
+  const runProbe = async (kind, fn) => {
+    setProbe({ kind, state: "running" });
+    try { setProbe({ kind, state: "done", data: await fn() }); }
+    catch (e) { setProbe({ kind, state: "error", data: e.message }); }
   };
 
   const importCookies = async (file) => {
@@ -682,6 +747,16 @@ function Editor({ profile, live, onClose, onSave }) {
                   <button className={"ps-toggle" + (p.dnt ? " on" : "")} onClick={() => set({ dnt: !p.dnt })}><span className="knob" /> <em>{p.dnt ? "On" : "Off"}</em></button>
                 </Field>
               </Row>
+
+              <SectionLabel icon={<ShieldCheck size={13} />} text="Trust check" />
+              <button className="ps-btn ghost sm" disabled={!cookiesReady || probe?.state === "running"}
+                onClick={() => runProbe("trust", () => api.trust(p.id))}>
+                <ShieldCheck size={13} /> Run trust check
+              </button>
+              <ProbePanel probe={probe} kind="trust" />
+              <div className="ps-hint"><ShieldCheck size={12} /> {cookiesReady
+                ? "Opens the profile and runs the checks a fingerprinting script would: webdriver, plugins, UA vs platform, WebGL, fonts, media devices, canvas stability. The meter above grades the config; this grades the real browser."
+                : "Save the profile and start the engine to grade the real browser."}</div>
             </>
           )}
 
@@ -707,8 +782,15 @@ function Editor({ profile, live, onClose, onSave }) {
                     <Field label="Username"><input className="ps-in mono" value={p.proxy.user} onChange={e => setProxy({ user: e.target.value })} /></Field>
                     <Field label="Password"><input className="ps-in mono" type="password" value={p.proxy.pass} onChange={e => setProxy({ pass: e.target.value })} /></Field>
                   </Row>
-                  <button className="ps-btn ghost sm" style={{ marginTop: 4 }}><RefreshCw size={13} /> Test connection</button>
-                  <div className="ps-hint"><MapPin size={12} /> Timezone & locale can auto-align to the proxy country to avoid geo-mismatch leaks.</div>
+                  <button className="ps-btn ghost sm" style={{ marginTop: 4 }}
+                    disabled={!cookiesReady || probe?.state === "running"}
+                    onClick={() => runProbe("proxy", () => api.proxyTest(p.id))}>
+                    <RefreshCw size={13} /> Test connection
+                  </button>
+                  <ProbePanel probe={probe} kind="proxy" />
+                  <div className="ps-hint"><MapPin size={12} /> {cookiesReady
+                    ? "Routes a real request through this profile and reports the exit IP, country and whether WebRTC leaks your own address."
+                    : "Save the profile and start the engine to test the connection for real."}</div>
                 </>
               ) : <div className="ps-hint">No proxy — this profile connects directly. Turn it on to route through a residential or datacenter proxy.</div>}
             </>
@@ -719,6 +801,24 @@ function Editor({ profile, live, onClose, onSave }) {
               <Field label="Startup URLs (one per line)"><textarea className="ps-in mono" rows={3} value={p.startupUrls} onChange={e => set({ startupUrls: e.target.value })} placeholder={"https://facebook.com\nhttps://business.facebook.com"} /></Field>
               <Field label="WebGL vendor"><input className="ps-in mono" value={p.webglVendor} onChange={e => set({ webglVendor: e.target.value })} /></Field>
               <div className="ps-hint"><Fingerprint size={12} /> Seed & canvas noise are managed by the engine and stay stable across launches for this profile.</div>
+
+              <SectionLabel icon={<Blocks size={13} />} text="Extensions" />
+              <Field label="Unpacked extension folders (one per line)">
+                <textarea className="ps-in mono" rows={2} value={p.extensions || ""}
+                  onChange={e => set({ extensions: e.target.value })}
+                  placeholder={"C:\\\\tools\\\\metamask\\n/home/me/ext/ublock"} />
+              </Field>
+              <div className="ps-hint"><Blocks size={12} /> Point at the folder containing <code>manifest.json</code>. Only these extensions load, so nothing carries over between profiles.</div>
+
+              <SectionLabel icon={<Sparkles size={13} />} text="Warm-up" />
+              <div className="ps-cookie-actions">
+                <button className="ps-btn ghost sm" disabled={!cookiesReady}
+                  onClick={() => api.warmup(p.id, 5).then(() => setCkMsg("Warm-up started — it runs in the background for 5 minutes."))
+                                    .catch(e => setCkMsg("Warm-up failed: " + e.message))}>
+                  <Sparkles size={13} /> Warm up for 5 minutes
+                </button>
+              </div>
+              <div className="ps-hint"><Sparkles size={12} /> A profile created minutes ago with no history is a signal in itself. Warm-up browses ordinary sites at human pace so the session arrives with a plausible past. It shows as running until it finishes.</div>
 
               <SectionLabel icon={<Cookie size={13} />} text="Session cookies" />
               {cookiesReady ? (
@@ -752,6 +852,71 @@ function Editor({ profile, live, onClose, onSave }) {
           <button className="ps-btn ghost" onClick={onClose}>Cancel</button>
           <button className="ps-btn primary" disabled={!p.name} onClick={() => onSave({ ...p, _new: false })}>
             <Check size={15} /> {p._new ? "Create profile" : "Save changes"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---- Multi-profile synchroniser: one change, applied to many ------ */
+function SyncModal({ ids, onClose, onApply }) {
+  const [engine, setEngine] = useState("");
+  const [locale, setLocale] = useState("");
+  const [tag, setTag] = useState("");
+  const [folder, setFolder] = useState("");
+
+  // Only the fields you actually filled in get sent — a bulk edit should never
+  // quietly reset something you left blank.
+  const patch = {};
+  if (engine) patch.engine = engine;
+  if (locale) patch.locale = locale;
+  if (folder) patch.folder = folder;
+  if (tag.trim()) patch.addTags = tag.split(",").map(s => s.trim()).filter(Boolean);
+  const count = Object.keys(patch).length;
+
+  return (
+    <div className="ps-overlay center" onClick={onClose}>
+      <div className="ps-modal ps-pop" onClick={e => e.stopPropagation()}>
+        <div className="ps-drawer-h">
+          <div>
+            <div className="ps-eyebrow">Edit {ids.length} profiles</div>
+            <div className="ps-drawer-title">Change once, apply to all</div>
+          </div>
+          <button className="ps-x" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div style={{ padding: 20 }}>
+          <Row>
+            <Field label="Launch engine">
+              <select className="ps-in" value={engine} onChange={e => setEngine(e.target.value)}>
+                <option value="">— leave unchanged —</option>
+                {ENGINE_ORDER.map(en => <option key={en} value={en}>{ENGINE_META[en].label}</option>)}
+              </select>
+            </Field>
+            <Field label="Locale (moves timezone too)">
+              <select className="ps-in" value={locale} onChange={e => setLocale(e.target.value)}>
+                <option value="">— leave unchanged —</option>
+                {Object.keys(LOCALES).map(l => <option key={l}>{l}</option>)}
+              </select>
+            </Field>
+          </Row>
+          <Row>
+            <Field label="Move to folder">
+              <select className="ps-in" value={folder} onChange={e => setFolder(e.target.value)}>
+                <option value="">— leave unchanged —</option>
+                {FOLDERS.filter(f => f !== "All profiles").map(f => <option key={f}>{f}</option>)}
+              </select>
+            </Field>
+            <Field label="Add tags (comma separated)">
+              <input className="ps-in" value={tag} onChange={e => setTag(e.target.value)} placeholder="q3-campaign" />
+            </Field>
+          </Row>
+          <div className="ps-hint"><Copy size={12} /> Blank fields are left alone, so you can run this again later to change one more thing.</div>
+        </div>
+        <div className="ps-drawer-foot">
+          <button className="ps-btn ghost" onClick={onClose}>Cancel</button>
+          <button className="ps-btn primary" disabled={!count} onClick={() => onApply(patch)}>
+            <Check size={15} /> Apply to {ids.length}
           </button>
         </div>
       </div>
@@ -1062,6 +1227,16 @@ select.ps-in { cursor: pointer; }
 .ps-toggle.sm.on .knob::after { left: 13px; }
 .ps-proxy-toggle { display: flex; align-items: center; justify-content: space-between; padding: 13px 15px; background: ${T.bg}; border: 1px solid ${T.line}; border-radius: 11px; margin-bottom: 16px; }
 .ps-cookie-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
+.ps-probe { margin-top: 12px; border: 1px solid ${T.lineSoft}; border-radius: 10px; background: ${T.bg}; overflow: hidden; }
+.ps-probe-head { display: flex; align-items: baseline; gap: 10px; padding: 12px 14px; border-bottom: 1px solid ${T.lineSoft}; font-size: 12px; color: ${T.muted}; }
+.ps-probe-score { font-family: ${FONT.display}; font-size: 20px; font-weight: 700; }
+.ps-check { display: flex; align-items: flex-start; gap: 8px; padding: 7px 14px; font-size: 11.5px; color: ${T.red}; line-height: 1.5; }
+.ps-check.ok { color: ${T.muted}; }
+.ps-check svg { flex-shrink: 0; margin-top: 2px; }
+.ps-check.ok svg { color: ${T.mint}; }
+.ps-check em { font-style: normal; color: ${T.dim}; }
+.ps-spin { animation: ps-rot 1s linear infinite; }
+@keyframes ps-rot { to { transform: rotate(360deg); } }
 .ps-cookie-actions .ps-btn.disabled { opacity: .5; cursor: progress; }
 .ps-hint code { font-family: ${FONT.mono}; font-size: 11px; color: ${T.text}; }
 .ps-hint { display: flex; align-items: flex-start; gap: 8px; font-size: 11.5px; color: ${T.muted}; margin-top: 12px; line-height: 1.55; background: ${T.bg}; border: 1px solid ${T.lineSoft}; padding: 11px 13px; border-radius: 10px; }

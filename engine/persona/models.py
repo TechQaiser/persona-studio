@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 from typing import Optional
 
 
@@ -35,13 +35,19 @@ class Fingerprint:
     languages: list[str]
     is_mobile: bool = False
     seed: int = 0
+    # Secondary signals. They have defaults so profiles saved by older versions
+    # still load; ``generate()`` fills them from the device archetype.
+    fonts: list[str] = field(default_factory=list)   # installed-font probe answers
+    cameras: int = 1                                  # enumerateDevices() videoinput
+    microphones: int = 1                              # enumerateDevices() audioinput
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Fingerprint":
-        return cls(**d)
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
 
 
 @dataclass
@@ -80,6 +86,7 @@ class Profile:
     tags: list[str] = field(default_factory=list)
     engine: str = "playwright"  # which launch backend to use (see drivers.py)
     startup_urls: list[str] = field(default_factory=list)  # opened on launch
+    extensions: list[str] = field(default_factory=list)  # unpacked extension dirs
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
@@ -92,6 +99,7 @@ class Profile:
             "tags": self.tags,
             "engine": self.engine,
             "startup_urls": self.startup_urls,
+            "extensions": self.extensions,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "fingerprint": self.fingerprint.to_dict(),
@@ -107,6 +115,7 @@ class Profile:
             tags=d.get("tags", []),
             engine=d.get("engine", "playwright"),
             startup_urls=d.get("startup_urls", []),
+            extensions=d.get("extensions", []),
             created_at=d.get("created_at", time.time()),
             updated_at=d.get("updated_at", time.time()),
             fingerprint=Fingerprint.from_dict(d["fingerprint"]),

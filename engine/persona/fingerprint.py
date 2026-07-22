@@ -97,6 +97,17 @@ def generate(
     loc = _pick_locale(rng, locale, proxy)
     timezone, languages = devices.LOCALES[loc]
 
+    # 7. Secondary signals. Fonts come from the OS's real set (minus a few, since
+    #    no two machines have an identical list); media devices match the form
+    #    factor — phones always have both, desktops sometimes have neither.
+    pool = devices.FONTS[os_key]
+    fonts = sorted(rng.sample(pool, k=max(6, len(pool) - rng.randint(0, 6))))
+    if is_mobile:
+        cameras, microphones = 2, 1
+    else:
+        cameras = rng.choice([0, 1, 1, 1, 2])
+        microphones = rng.choice([0, 1, 1, 1, 2]) if cameras else rng.choice([0, 1])
+
     return Fingerprint(
         os=os_key,
         user_agent=_build_user_agent(os_key, chrome),
@@ -116,6 +127,9 @@ def generate(
         languages=languages,
         is_mobile=is_mobile,
         seed=seed,
+        fonts=fonts,
+        cameras=cameras,
+        microphones=microphones,
     )
 
 
@@ -158,5 +172,17 @@ def validate(fp: Fingerprint) -> list[str]:
 
     if fp.is_mobile != (fp.os == "android"):
         issues.append("is_mobile flag inconsistent with os")
+
+    # A font that doesn't ship with this OS is as loud a tell as the wrong GPU.
+    if fp.fonts:
+        pool = set(devices.FONTS.get(fp.os, []))
+        alien = [f for f in fp.fonts if f not in pool]
+        if alien:
+            issues.append(f"fonts not found on {fp.os}: {', '.join(sorted(alien)[:3])}")
+
+    if fp.cameras < 0 or fp.microphones < 0:
+        issues.append("media device counts cannot be negative")
+    elif fp.is_mobile and (fp.cameras == 0 or fp.microphones == 0):
+        issues.append("a phone with no camera or microphone is implausible")
 
     return issues

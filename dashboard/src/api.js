@@ -44,4 +44,9 @@ export const api = {
   // these calls open it headlessly and can take a couple of seconds.
   exportCookies: (id) => req("GET", `/api/profiles/${id}/cookies`),
   importCookies: (id, text, clear) => req("POST", `/api/profiles/${id}/cookies`, { text, clear }),
+  // These open the profile headlessly too, so they're slow by nature.
+  proxyTest: (id) => req("POST", `/api/profiles/${id}/proxy-test`),
+  trust: (id) => req("POST", `/api/profiles/${id}/trust`),
+  warmup: (id, minutes) => req("POST", `/api/profiles/${id}/warmup`, { minutes }),
+  bulkUpdate: (ids, patch) => req("POST", "/api/profiles/bulk", { ids, patch }),
 };

@@ -22,8 +22,6 @@ profile headlessly and use the real cookie store.
 from __future__ import annotations
 
 import json
-from contextlib import contextmanager
-from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
@@ -151,37 +149,10 @@ def dumps(cookies: list[dict], fmt: str = "json") -> str:
 # --------------------------------------------------------------------------
 # Reading / writing the profile's real cookie store.
 # --------------------------------------------------------------------------
-@contextmanager
-def _session(profile: Profile, store: ProfileStore, engine: Optional[str] = None):
-    """Open the profile's persistent session headlessly and yield its context.
-
-    Startup URLs are stripped for this launch — we only want the cookie jar, not
-    a browsing session.
-    """
-    name = engine or profile.engine or "playwright"
-    quiet = replace(profile, startup_urls=[])
-
-    if name == "camoufox":
-        # Camoufox's driver is launch-and-wait only, so open it directly here.
-        from camoufox.sync_api import Camoufox
-        with Camoufox(headless=True, persistent_context=True,
-                      user_data_dir=str(store.user_data_path(profile.id))) as browser:
-            yield browser
-        return
-
-    from .launcher import launch
-    pw, context, _page = launch(quiet, store, headless=True, keep_open=True, engine=name)
-    try:
-        yield context
-    finally:
-        context.close()   # flushes the cookie jar to disk
-        if pw:
-            pw.stop()
-
-
 def read(profile: Profile, store: ProfileStore, engine: Optional[str] = None) -> list[dict]:
     """Read every cookie in the profile's session."""
-    with _session(profile, store, engine) as context:
+    from .drivers import session
+    with session(profile, store, engine) as context:
         return [c for c in (normalize(dict(c)) for c in context.cookies()) if c]
 
 
@@ -194,7 +165,8 @@ def write(profile: Profile, store: ProfileStore, cookies: list[dict],
     """
     if not cookies:
         return 0
-    with _session(profile, store, engine) as context:
+    from .drivers import session
+    with session(profile, store, engine) as context:
         if clear:
             context.clear_cookies()
         context.add_cookies(cookies)

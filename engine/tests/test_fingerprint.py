@@ -4,7 +4,7 @@ import pytest
 
 from persona import generate, validate
 from persona.fingerprint import sec_ch_ua
-from persona.models import Proxy
+from persona.models import Fingerprint, Proxy
 from persona import devices
 
 
@@ -74,3 +74,46 @@ def test_validate_catches_tampering():
     fp.platform = "MacIntel"  # deliberately break coherence
     problems = validate(fp)
     assert any("platform" in p for p in problems)
+
+
+def test_fonts_come_from_the_os_font_set():
+    for os_key in ("windows", "macos", "linux", "android"):
+        fp = generate(seed=3, os=os_key)
+        assert fp.fonts, f"{os_key} generated no fonts"
+        assert set(fp.fonts) <= set(devices.FONTS[os_key])
+
+
+def test_validate_catches_a_font_from_another_os():
+    fp = generate(seed=12, os="windows")
+    fp.fonts = fp.fonts + ["Helvetica Neue"]   # macOS-only
+    assert any("fonts" in p for p in validate(fp))
+
+
+def test_phones_always_have_a_camera_and_microphone():
+    for seed in range(30):
+        fp = generate(seed=seed, os="android")
+        assert fp.cameras > 0 and fp.microphones > 0
+
+
+def test_validate_catches_a_phone_with_no_camera():
+    fp = generate(seed=4, os="android")
+    fp.cameras = 0
+    assert any("camera" in p for p in validate(fp))
+
+
+def test_desktops_may_have_no_webcam():
+    # A tower with no webcam is normal — the generator must be able to say so.
+    assert any(generate(seed=s, os="windows").cameras == 0 for s in range(40))
+
+
+def test_secondary_signals_survive_a_round_trip():
+    fp = generate(seed=8, os="macos")
+    assert Fingerprint.from_dict(fp.to_dict()).fonts == fp.fonts
+
+
+def test_fingerprints_saved_before_these_fields_existed_still_load():
+    d = generate(seed=9).to_dict()
+    for gone in ("fonts", "cameras", "microphones"):
+        del d[gone]
+    restored = Fingerprint.from_dict(d)
+    assert restored.fonts == [] and restored.cameras == 1

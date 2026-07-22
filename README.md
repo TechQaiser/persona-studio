@@ -59,6 +59,12 @@ persona-studio/
 | 🎛️ **Rich editor** | Canvas, WebRTC, audio, fonts, geolocation, media devices, DNT |
 | 💾 **Persistent sessions** | Cookies & localStorage survive between launches |
 | 🍪 **Cookie import/export** | Move a logged-in session in or out — Cookie-Editor JSON, Playwright state, or `cookies.txt` |
+| 🔎 **Trust checker** | Grades the *real* browser against the checks a fingerprinter runs |
+| 📡 **Proxy & leak test** | Exit IP, country and timezone match + WebRTC leak detection |
+| 🧩 **Extensions** | Per-profile unpacked extensions, isolated from every other profile |
+| ✨ **Warm-up** | Human-paced browsing so a fresh profile isn't obviously fresh |
+| 🤖 **Automation attach** | Drive a live profile from Selenium, Puppeteer or Playwright over CDP |
+| 🔁 **Bulk edit** | One change applied to hundreds of profiles, coherently |
 | 📦 **Bulk create** | Spin up dozens of coherent profiles at once |
 | 🗂️ **Folders, tags, search** | Organize hundreds of accounts |
 | 🖥️ **Real browser** | Launches a real browser, per-profile isolation |
@@ -209,15 +215,20 @@ stays the same manager over all of them.
 - [x] Cookie import/export (CLI, API, dashboard) — Cookie-Editor JSON,
       Playwright storage state, Netscape `cookies.txt`
 
+- [x] Account warm-up — human-paced browsing that ages a fresh profile
+- [x] Local automation API — `persona attach` opens CDP for Selenium/Puppeteer/Playwright
+- [x] Multi-profile synchronizer — `persona apply`, plus "Edit all" in the dashboard
+- [x] Proxy tester + WebRTC leak checker (`persona proxy test`)
+- [x] Fingerprint trust checker (`persona trust`) — grades the real browser, not the config
+- [x] Extensions manager, plus fonts, media devices, ClientRects & audio noise
+
 **Next**
 
-- [ ] Account warm-up (human-like browsing to age a fresh profile)
-- [ ] Local automation API (attach Selenium/Puppeteer/Playwright)
-- [ ] Multi-profile synchronizer (type once, apply to many)
-- [ ] Proxy tester + IP/WebRTC/DNS leak checker
-- [ ] Fingerprint trust checker (CreepJS / Pixelscan style score)
-- [ ] Cloud sync + team roles
-- [ ] Extensions manager, more fingerprint params (fonts, media IDs, ClientRects)
+- [ ] DNS leak checker (needs a resolver-side probe, not just the browser)
+- [ ] Cookie warm-up presets per vertical (ads, e-commerce, crypto)
+- [ ] Cloud sync + team roles — deliberately unbuilt: it needs a hosted backend,
+      accounts and a threat model of its own. Persona stays local-first until
+      that's designed properly rather than bolted on.
 
 Want to help? See [CONTRIBUTING.md](CONTRIBUTING.md).
 

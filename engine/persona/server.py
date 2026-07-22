@@ -108,17 +108,21 @@ def _engine_webgl(os_key: str, dash_renderer: str) -> tuple[str, str]:
     return pool[0]
 
 
+def _parse_lines(raw) -> list[str]:
+    """Accept a newline-separated string (or a list) and return clean entries."""
+    if not raw:
+        return []
+    parts = raw if isinstance(raw, list) else raw.splitlines()
+    return [p.strip() for p in parts if p.strip()]
+
+
 def _parse_startup_urls(raw) -> list[str]:
     """Accept a newline/comma/space-separated string (or list) of URLs and
     return a clean list, adding a scheme where one is missing."""
-    if not raw:
-        return []
-    parts = raw if isinstance(raw, list) else raw.replace(",", "\n").split("\n")
+    if isinstance(raw, str):
+        raw = raw.replace(",", "\n")
     urls = []
-    for p in parts:
-        u = p.strip()
-        if not u:
-            continue
+    for u in _parse_lines(raw):
         if "://" not in u and not u.startswith("about:"):
             u = "https://" + u
         urls.append(u)
@@ -155,6 +159,9 @@ def to_engine_profile(d: dict) -> Profile:
         viewport_height=vh,
         hardware_concurrency=int(d.get("cores", 8)),
         device_memory=int(d.get("memory", 16)),
+        fonts=devices.FONTS.get(os_key, []),
+        cameras=int(d.get("mediaVideo", 1)),
+        microphones=int(d.get("mediaAudio", 1)),
         webgl_vendor=vendor,
         webgl_renderer=renderer,
         locale=locale,
@@ -184,6 +191,7 @@ def to_engine_profile(d: dict) -> Profile:
         tags=d.get("tags", []),
         engine=d.get("engine", "playwright"),
         startup_urls=_parse_startup_urls(d.get("startupUrls")),
+        extensions=_parse_lines(d.get("extensions")),
     )
 
 
@@ -345,14 +353,19 @@ def create_app(data_dir: Optional[str] = None):
         _stop(pid)
         return decorate(d)
 
-    def _run_cli(*cli_args: str) -> str:
+    def _run_cli(*cli_args: str, allow_fail: bool = False) -> str:
         """Run a persona subcommand in its own process (same reasoning as launch:
-        keeps sync Playwright out of the web server) and return its output."""
+        keeps sync Playwright out of the web server) and return its output.
+
+        ``allow_fail`` is for commands whose non-zero exit means "the thing you
+        asked about is unhealthy", not "the command broke" — a failing proxy test
+        still has a result worth showing.
+        """
         proc = subprocess.run(
             [sys.executable, "-m", "persona", "--data-dir", str(engine_store.root), *cli_args],
             capture_output=True, text=True,
         )
-        if proc.returncode != 0:
+        if proc.returncode != 0 and not (allow_fail and proc.stdout.strip()):
             raise HTTPException(500, (proc.stdout + proc.stderr).strip() or "command failed")
         return proc.stdout
 
@@ -392,6 +405,55 @@ def create_app(data_dir: Optional[str] = None):
                 args.append("--clear")
             _run_cli(*args)
         return {"ok": True, "imported": len(cookies_mod.parse(raw))}
+
+    @app.post("/api/profiles/{pid}/proxy-test")
+    def proxy_test(pid: str):
+        _prepare(pid)
+        # --json makes the CLI the single implementation for both front doors.
+        return json.loads(_run_cli("proxy", "test", pid, "--json", allow_fail=True))
+
+    @app.post("/api/profiles/{pid}/trust")
+    def trust(pid: str):
+        _prepare(pid)
+        return json.loads(_run_cli("trust", pid, "--json"))
+
+    @app.post("/api/profiles/{pid}/warmup")
+    def warmup(pid: str, body: Optional[dict] = None):
+        d = _prepare(pid)
+        minutes = float((body or {}).get("minutes", 5))
+        # Warm-up runs for minutes, so it goes in the background exactly like a
+        # launch — the profile shows as running and "stop" ends it.
+        running[pid] = subprocess.Popen(
+            [sys.executable, "-m", "persona", "--data-dir", str(engine_store.root),
+             "warmup", pid, "--minutes", str(minutes), "--headless"],
+        )
+        return decorate(d)
+
+    @app.post("/api/profiles/bulk")
+    def bulk_update(body: dict):
+        """Apply one patch to many profiles — the dashboard's multi-select edit."""
+        ids = body.get("ids") or []
+        patch = body.get("patch") or {}
+        updated = []
+        for pid in ids:
+            d = dash.get(pid)
+            if not d:
+                continue
+            for key, value in patch.items():
+                if key == "addTags":
+                    d["tags"] = sorted({*d.get("tags", []), *value})
+                elif key == "removeTags":
+                    d["tags"] = [t for t in d.get("tags", []) if t not in value]
+                elif key == "locale":
+                    # Locale drives timezone, so move both or the profile stops
+                    # being coherent.
+                    d["locale"] = value
+                    d["timezone"] = devices.LOCALES.get(value, (d.get("timezone"), None))[0]
+                else:
+                    d[key] = value
+            _remember_engine(d)
+            updated.append(decorate(dash.save(d)))
+        return updated
 
     @app.post("/api/fingerprint/validate")
     def validate_fingerprint(profile: dict):
