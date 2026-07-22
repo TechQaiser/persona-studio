@@ -105,6 +105,24 @@ COUNTRY_TO_LOCALE = {
     "IN": "en-IN", "DE": "de-DE", "FR": "fr-FR", "ES": "es-ES", "TR": "tr-TR",
 }
 
+# Approximate (city-level) coordinates per country, so a profile's
+# geolocation can agree with its proxy/timezone instead of contradicting it.
+# City chosen to match the locale's timezone (e.g. US -> New York for
+# America/New_York). Accuracy is a plausible metres value, not a pinpoint.
+COUNTRY_GEO = {
+    "US": (40.7128, -74.0060), "GB": (51.5074, -0.1278),
+    "UK": (51.5074, -0.1278),  "PK": (24.8607, 67.0011),
+    "IN": (28.6139, 77.2090),  "DE": (52.5200, 13.4050),
+    "FR": (48.8566, 2.3522),   "ES": (40.4168, -3.7038),
+    "TR": (41.0082, 28.9784),
+}
+
+# locale -> the country whose coordinates fit it, for when there's no proxy.
+LOCALE_TO_COUNTRY = {
+    "en-US": "US", "en-GB": "GB", "en-PK": "PK", "en-IN": "IN",
+    "de-DE": "DE", "fr-FR": "FR", "es-ES": "ES", "tr-TR": "TR",
+}
+
 # Fonts that actually ship with each OS. Font-probing is a classic fingerprint
 # vector — a "Windows" browser that can render Helvetica Neue but not Segoe UI
 # is a giveaway — so each archetype carries its own realistic set.

@@ -226,6 +226,7 @@ stays the same manager over all of them.
 
 - [x] TLS/JA3 handshake checker (`persona tls`) — the pre-JS network layer
 - [x] Encrypted secrets at rest (`persona vault`) — proxy passwords, master-password
+- [x] Geolocation aligned to the proxy country + WebRTC IP-handling enforced at launch
 
 **Next**
 

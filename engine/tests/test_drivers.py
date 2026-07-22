@@ -41,3 +41,35 @@ def test_profile_defaults_to_playwright_engine():
     assert p.engine == "playwright"
     # round-trips through serialization
     assert Profile.from_dict(p.to_dict()).engine == "playwright"
+
+
+# ---- geolocation + WebRTC coherence --------------------------------------
+from persona.models import Proxy
+from persona.drivers import _geolocation_for, _webrtc_arg
+
+
+def _p(country=None, locale="en-US"):
+    proxy = Proxy(server="http://h:1", country=country) if country else None
+    return Profile(name="g", fingerprint=generate(seed=1, locale=locale), proxy=proxy)
+
+
+def test_geolocation_follows_proxy_country():
+    geo = _geolocation_for(_p(country="DE"))
+    assert (round(geo["latitude"]), round(geo["longitude"])) == (53, 13)  # Berlin
+
+
+def test_geolocation_falls_back_to_locale_without_proxy():
+    geo = _geolocation_for(_p(locale="fr-FR"))
+    assert round(geo["latitude"]) == 49 and round(geo["longitude"]) == 2   # Paris
+
+
+def test_geolocation_none_for_unknown_country():
+    assert _geolocation_for(_p(country="ZZ")) is None
+
+
+def test_webrtc_forces_proxy_when_one_is_set():
+    assert "disable_non_proxied_udp" in _webrtc_arg(_p(country="US"))[0]
+
+
+def test_webrtc_hides_local_ip_without_proxy():
+    assert "default_public_interface_only" in _webrtc_arg(_p())[0]

@@ -41,6 +41,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Optional
 
+from . import devices as fp_mod_devices
 from . import fingerprint as fp_mod
 from .models import Profile
 from .stealth import build_init_script
@@ -60,6 +61,30 @@ def _open_startup_urls(context, page, profile: Profile) -> None:
             target.goto(url, wait_until="domcontentloaded", timeout=30000)
         except Exception:
             continue  # unreachable site / typo — don't crash the session
+
+
+def _geolocation_for(profile: Profile) -> Optional[dict]:
+    """Coordinates that agree with the profile's proxy country (or its locale
+    when there's no proxy), so navigator.geolocation doesn't contradict the IP."""
+    country = None
+    if profile.proxy and profile.proxy.country:
+        country = profile.proxy.country.upper()
+    if not country:
+        country = fp_mod_devices.LOCALE_TO_COUNTRY.get(profile.fingerprint.locale)
+    coords = fp_mod_devices.COUNTRY_GEO.get(country or "")
+    if not coords:
+        return None
+    lat, lon = coords
+    return {"latitude": lat, "longitude": lon, "accuracy": 60}
+
+
+def _webrtc_arg(profile: Profile) -> list[str]:
+    """Stop WebRTC from leaking the real IP. With a proxy, force everything
+    through it (or don't send UDP at all); otherwise expose only the public
+    interface so local addresses stay hidden."""
+    if profile.proxy:
+        return ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
+    return ["--force-webrtc-ip-handling-policy=default_public_interface_only"]
 
 
 def _extension_args(profile: Profile) -> list[str]:
@@ -156,9 +181,11 @@ def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: 
         "--disable-blink-features=AutomationControlled",
         "--no-first-run",
         "--no-default-browser-check",
+        *_webrtc_arg(profile),
         *_extension_args(profile),
         *(extra_args or []),
     ]
+    geolocation = _geolocation_for(profile)
     context_opts: dict = {
         "user_agent": fp.user_agent,
         "locale": fp.locale,
@@ -179,6 +206,11 @@ def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: 
     }
     if profile.proxy:
         context_opts["proxy"] = profile.proxy.to_playwright()
+    if geolocation:
+        # Grant the permission too, so a site that asks gets the coordinates
+        # rather than a prompt that would stall an unattended session.
+        context_opts["geolocation"] = geolocation
+        context_opts["permissions"] = ["geolocation"]
 
     pw = sync_playwright().start()
     context = pw.chromium.launch_persistent_context(
@@ -276,7 +308,7 @@ def _driver_cloak(profile, store, headless=False, keep_open=True, extra_args=Non
         # hides that purely-cosmetic bar; it isn't visible to websites (JS can't
         # read command-line flags), so it doesn't affect the fingerprint.
         args=["--test-type", "--no-first-run", "--no-default-browser-check",
-              *_extension_args(profile), *(extra_args or [])],
+              *_webrtc_arg(profile), *_extension_args(profile), *(extra_args or [])],
     )
     page = context.pages[0] if context.pages else context.new_page()
     _open_startup_urls(context, page, profile)

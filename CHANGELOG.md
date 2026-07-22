@@ -72,6 +72,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   install commands. Reduced-motion respected.
 
 ### Changed
+- **Geolocation now agrees with the proxy.** Launches set
+  `navigator.geolocation` to coordinates for the proxy's country (or the
+  locale's, without a proxy) and pre-grant the permission, so a site that asks
+  gets coordinates that match the exit IP instead of a US timezone with German
+  GPS. New `devices.COUNTRY_GEO` / `LOCALE_TO_COUNTRY`.
+- **WebRTC IP handling is enforced at launch.** With a proxy, non-proxied UDP is
+  disabled (`disable_non_proxied_udp`) so WebRTC can't bypass it; without one,
+  only the public interface is exposed so local IPs stay hidden.
 - **Hardened the stealth script**: `navigator.webdriver` now reads `false` from the
   prototype (not an own property), `window.chrome`, realistic `navigator.plugins`/
   `mimeTypes` (native `PluginArray`), consistent `permissions.query`, and native
