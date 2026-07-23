@@ -193,6 +193,12 @@ dashboard uses to manage and launch profiles for real. It listens on
 | POST | `/api/profiles/{id}/warmup` | Start a background warm-up (`minutes`) |
 | POST | `/api/profiles/bulk` | Apply one `patch` to many `ids` |
 | POST | `/api/profiles/batch` | Save many generated `profiles` at once (bulk create) |
+| POST | `/api/profiles/import` | Import GoLogin/AdsPower/Multilogin export `text` |
+| GET | `/api/proxies` | List the proxy pool |
+| POST | `/api/proxies` | Import proxies from `text` (or a `proxies` list) |
+| DELETE | `/api/proxies/{id}` | Remove a proxy from the pool |
+| POST | `/api/proxies/{id}/test` | Health-check one proxy (exit IP/country) |
+| POST | `/api/proxies/assign` | Assign the pool round-robin across profiles |
 | POST | `/api/fingerprint/validate` | Coherence check a fingerprint |
 
 ## Python API
@@ -222,6 +228,7 @@ store.save(profile)
 | `importers.py` | Tolerant import from GoLogin / AdsPower / Multilogin exports |
 | `probe.py` | Proxy/leak/TLS test, the trust report, and the auto-aligner (`align`) |
 | `bulk.py` | Multi-profile synchroniser + bulk generator (`generate_profiles`) |
+| `proxypool.py` | Parse pasted proxy lists (any layout) + health-check them |
 | `warmup.py` | Human-paced browsing that gives a fresh profile a past |
 | `automation.py` | CDP attach so Selenium/Puppeteer/Playwright can drive a profile |
 | `stealth.py` | Generates the page-level JS patch for a fingerprint |

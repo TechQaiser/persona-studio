@@ -94,6 +94,61 @@ class DashboardStore:
         return True
 
 
+class ProxyPool:
+    """A managed list of proxies the dashboard can import, test and assign."""
+
+    def __init__(self, root: Path):
+        self.path = root / "proxies.json"
+
+    def list(self) -> list[dict]:
+        if not self.path.exists():
+            return []
+        try:
+            return json.loads(self.path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return []
+
+    def _save(self, items: list[dict]):
+        self.path.write_text(json.dumps(items, indent=2), encoding="utf-8")
+
+    def add_many(self, proxies: list[dict]) -> list[dict]:
+        items = self.list()
+        seen = {(p["host"], str(p["port"])) for p in items}
+        added = []
+        for pr in proxies:
+            key = (pr["host"], str(pr["port"]))
+            if key in seen:
+                continue
+            entry = {**pr, "id": uuid.uuid4().hex[:12], "status": "untested"}
+            items.append(entry)
+            seen.add(key)
+            added.append(entry)
+        self._save(items)
+        return added
+
+    def get(self, pid: str) -> Optional[dict]:
+        return next((p for p in self.list() if p.get("id") == pid), None)
+
+    def update(self, pid: str, patch: dict) -> Optional[dict]:
+        items = self.list()
+        out = None
+        for p in items:
+            if p.get("id") == pid:
+                p.update(patch)
+                out = p
+        if out:
+            self._save(items)
+        return out
+
+    def delete(self, pid: str) -> bool:
+        items = self.list()
+        kept = [p for p in items if p.get("id") != pid]
+        if len(kept) == len(items):
+            return False
+        self._save(kept)
+        return True
+
+
 def _vendor_for(renderer: str) -> str:
     """Guess a WebGL vendor string from a renderer string's GPU family."""
     r = (renderer or "").lower()
@@ -207,6 +262,53 @@ def to_engine_profile(d: dict) -> Profile:
     )
 
 
+def _proxy_to_dash(proxy) -> Optional[dict]:
+    """Turn an engine Proxy into the dashboard's proxy dict."""
+    if not proxy or not proxy.server:
+        return None
+    server = proxy.server
+    scheme = "http"
+    if "://" in server:
+        scheme, server = server.split("://", 1)
+    host, _, port = server.partition(":")
+    kind = {"http": "HTTP", "https": "HTTPS", "socks5": "SOCKS5", "socks4": "SOCKS4"}.get(scheme.lower(), "HTTP")
+    return {"type": kind, "host": host, "port": port,
+            "user": proxy.username or "", "pass": proxy.password or "",
+            "country": proxy.country or ""}
+
+
+def to_dashboard_profile(prof: Profile) -> dict:
+    """Convert an engine :class:`Profile` into a dashboard-shaped dict.
+
+    The reverse of :func:`to_engine_profile` — used when the engine produces a
+    profile (an import) that the dashboard then owns and displays."""
+    fp = prof.fingerprint
+    return {
+        "name": prof.name,
+        "folder": "Facebook Ads",
+        "status": "stopped",
+        "os": OS_TO_DASH.get(fp.os, "Windows"),
+        "engine": prof.engine or "playwright",
+        "browser": "Chrome",
+        "browserVersion": fp.chrome_version,
+        "userAgent": fp.user_agent,
+        "screen": f"{fp.screen_width}x{fp.screen_height}",
+        "cores": fp.hardware_concurrency,
+        "memory": fp.device_memory,
+        "webglVendor": fp.webgl_vendor,
+        "webglRenderer": fp.webgl_renderer,
+        "canvas": "Noise", "webrtc": "Altered", "audio": "Noise", "fonts": "Masked",
+        "locale": fp.locale, "timezone": fp.timezone, "geo": "Prompt",
+        "mediaVideo": fp.cameras, "mediaAudio": fp.microphones, "dnt": False,
+        "proxy": _proxy_to_dash(prof.proxy),
+        "notes": prof.notes or "",
+        "tags": list(prof.tags),
+        "startupUrls": "\n".join(prof.startup_urls or []),
+        "extensions": "\n".join(prof.extensions or []),
+        "lastActive": "never",
+    }
+
+
 def _rel_time(ts: Optional[float]) -> str:
     """Human 'last active' label from a unix timestamp."""
     if not ts:
@@ -238,6 +340,7 @@ def create_app(data_dir: Optional[str] = None):
 
     engine_store = ProfileStore(data_dir)
     dash = DashboardStore(engine_store.root)
+    pool = ProxyPool(engine_store.root)
     running: dict[str, subprocess.Popen] = {}
 
     app = FastAPI(title="Persona API", version="0.1.0")
@@ -514,6 +617,89 @@ def create_app(data_dir: Optional[str] = None):
     @app.post("/api/fingerprint/validate")
     def validate_fingerprint(profile: dict):
         return {"issues": dashboard_coherence(profile)}
+
+    @app.post("/api/profiles/import")
+    def import_profiles(body: dict):
+        """Import profiles exported from GoLogin / AdsPower / Multilogin.
+
+        Runs the engine's tolerant importer, converts each result to the
+        dashboard shape and saves it, flagging any coherence issues for review."""
+        from . import importers
+        text = body.get("text") or ""
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError:
+            raise HTTPException(400, "that file isn't valid JSON")
+        exports = importers._unwrap(raw)
+        if not exports:
+            raise HTTPException(400, "no profiles found in that file")
+        results = []
+        for exp in exports:
+            prof, issues = importers.profile_from_export(exp)
+            d = to_dashboard_profile(prof)
+            d["_new"] = True
+            _remember_engine(d)
+            dash.save(d)
+            results.append({"name": prof.name, "issues": issues})
+        return {"imported": len(results), "results": results}
+
+    # ---- Proxy pool ------------------------------------------------------
+    @app.get("/api/proxies")
+    def list_proxies():
+        return pool.list()
+
+    @app.post("/api/proxies")
+    def add_proxies(body: dict):
+        from . import proxypool as pp
+        incoming = body.get("proxies")
+        parsed = incoming if incoming else pp.parse_many(body.get("text") or "")
+        if not parsed:
+            raise HTTPException(400, "no proxies could be parsed from that input")
+        added = pool.add_many(parsed)
+        return {"added": len(added), "total": len(pool.list()), "proxies": added}
+
+    @app.delete("/api/proxies/{pid}")
+    def delete_proxy(pid: str):
+        if not pool.delete(pid):
+            raise HTTPException(404, "proxy not found")
+        return {"ok": True}
+
+    @app.post("/api/proxies/{pid}/test")
+    def test_proxy(pid: str):
+        from . import proxypool as pp
+        proxy = pool.get(pid)
+        if not proxy:
+            raise HTTPException(404, "proxy not found")
+        res = pp.check(proxy)
+        status = "ok" if res.get("ok") else ("skipped" if res.get("ok") is None else "failed")
+        pool.update(pid, {"status": status, "lastCheck": res, "checkedAt": time.time()})
+        return {**res, "status": status}
+
+    @app.post("/api/proxies/assign")
+    def assign_proxies(body: dict):
+        """Assign pool proxies across profiles, round-robin, aligning each
+        profile's locale/timezone to its proxy country."""
+        proxies = [pool.get(i) for i in body.get("proxyIds", [])] if body.get("proxyIds") else pool.list()
+        proxies = [p for p in proxies if p]
+        if not proxies:
+            raise HTTPException(400, "the proxy pool is empty")
+        ids = body.get("profileIds")
+        targets = [dash.get(i) for i in ids] if ids else dash.list()
+        targets = [t for t in targets if t]
+        assigned = 0
+        for i, prof in enumerate(targets):
+            pr = proxies[i % len(proxies)]
+            prof["proxy"] = {"type": pr.get("type", "HTTP"), "host": pr["host"], "port": str(pr["port"]),
+                             "user": pr.get("user") or "", "pass": pr.get("pass") or "",
+                             "country": pr.get("country") or ""}
+            cc = (pr.get("country") or "").upper()
+            loc = devices.COUNTRY_TO_LOCALE.get(cc)
+            if loc:
+                prof["locale"] = loc
+                prof["timezone"] = devices.LOCALES[loc][0]
+            dash.save(prof)
+            assigned += 1
+        return {"assigned": assigned, "pool": len(proxies)}
 
     return app
 

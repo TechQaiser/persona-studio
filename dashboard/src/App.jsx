@@ -285,6 +285,25 @@ export default function App() {
     setProfiles(ps => ps.some(x => x.id === p.id) ? ps.map(x => x.id === p.id ? p : x) : [...ps, p]);
   };
 
+  // Import profiles exported from GoLogin / AdsPower / Multilogin.
+  const importProfiles = () => {
+    if (!live) { alert("Start the engine (persona serve) to import profiles."); return; }
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.accept = ".json,application/json";
+    inp.onchange = async () => {
+      const f = inp.files?.[0];
+      if (!f) return;
+      try {
+        const res = await api.importProfiles(await f.text());
+        await refresh();
+        const flagged = (res.results || []).filter(r => r.issues?.length).length;
+        alert(`Imported ${res.imported} profile${res.imported === 1 ? "" : "s"}.`
+          + (flagged ? ` ${flagged} flagged for review — open them to see the coherence notes.` : ""));
+      } catch (e) { alert("Import failed: " + e.message); }
+    };
+    inp.click();
+  };
+
   const toggleSel = (id) => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const allSel = filtered.length > 0 && filtered.every(p => sel.has(p.id));
 
@@ -347,6 +366,7 @@ export default function App() {
             <Stat icon={<ShieldCheck size={16} />} label="Coherent"
               value={coherentCount + "/" + profiles.length} accent={T.violet} />
             <div style={{ flex: 1 }} />
+            <button className="ps-btn ghost" onClick={importProfiles}><Download size={14} /> Import</button>
             <button className="ps-btn ghost" onClick={() => setBulk(true)}><Boxes size={14} /> Bulk create</button>
             <button className="ps-btn primary" onClick={() => setEditor(newProfile(folder, defaultEngine))}><Plus size={15} /> New profile</button>
           </div>
@@ -355,7 +375,7 @@ export default function App() {
             <ProfilesView {...{ filtered, query, setQuery, folder, sel, setSel, toggleSel, allSel, toggleRun, clone, remove, setEditor, setProfiles, setSync, filters, setFilters, live, refresh }} />
           )}
           {view === "engines" && <EnginesView engines={engines} live={live} />}
-          {view === "proxies" && <ProxiesView profiles={profiles} />}
+          {view === "proxies" && <ProxiesView profiles={profiles} live={live} refresh={refresh} />}
           {!["profiles", "engines", "proxies"].includes(view) && <Placeholder view={view} />}
         </main>
       </div>
@@ -1110,7 +1130,6 @@ function BulkModal({ onClose, onCreate, folder, defaultEngine }) {
   const [browsers, setBrowsers] = useState([...CHROME_VERSIONS]);
   const [engine, setEngine] = useState(defaultEngine || ENGINE_ORDER[0]);
   const [randomize, setRandomize] = useState(true);
-  const [useProxy, setUseProxy] = useState(false);
   const [prefix, setPrefix] = useState("Batch");
   const [start, setStart] = useState(1);
   const [tagStr, setTagStr] = useState("bulk");
@@ -1141,7 +1160,7 @@ function BulkModal({ onClose, onCreate, folder, defaultEngine }) {
         webglVendor: vendorFor(gpu), webglRenderer: gpu,
         canvas: "Noise", webrtc: "Altered", audio: "Noise", fonts: "Masked",
         locale, timezone: LOCALES[locale], geo: "Prompt", mediaVideo: 1, mediaAudio: 1, dnt: false,
-        proxy: useProxy ? { type: "HTTP", host: `res-${country.toLowerCase()}.proxy.io`, port: "8080", user: "u", pass: "•••••", country } : null,
+        proxy: null,   // real proxies are attached from the pool (Proxies → Assign)
         notes: "", startupUrls: "", extensions: "", lastActive: "never", _new: true,
       };
     }
@@ -1184,16 +1203,12 @@ function BulkModal({ onClose, onCreate, folder, defaultEngine }) {
             <Field label="Tags"><input className="ps-in" value={tagStr} onChange={e => setTagStr(e.target.value)} placeholder="bulk, q3" /></Field>
           </Row>
 
-          <Row>
-            <Field label="Vary GPU / screen / CPU / RAM">
-              <button className={"ps-toggle" + (randomize ? " on" : "")} onClick={() => setRandomize(v => !v)}><span className="knob" /> <em>{randomize ? "Randomized" : "Fixed"}</em></button>
-            </Field>
-            <Field label="Attach a proxy per country">
-              <button className={"ps-toggle" + (useProxy ? " on" : "")} onClick={() => setUseProxy(v => !v)}><span className="knob" /> <em>{useProxy ? "On" : "Off"}</em></button>
-            </Field>
-          </Row>
+          <Field label="Vary GPU / screen / CPU / RAM">
+            <button className={"ps-toggle" + (randomize ? " on" : "")} onClick={() => setRandomize(v => !v)}><span className="knob" /> <em>{randomize ? "Randomized per profile" : "Fixed per OS"}</em></button>
+          </Field>
 
           <div className="ps-hint"><Boxes size={12} /> Each profile gets its own coherent fingerprint, seed & session — {randomize ? "hardware varies per profile" : "hardware fixed per OS"}. Preview: <b style={{ color: T.text }}>{prefix}-{String(start).padStart(pad, "0")} … {prefix}-{String(start + n - 1).padStart(pad, "0")}</b> · {oses.join("/")} · {countries.join("/")}</div>
+          <div className="ps-hint"><Globe size={12} /> These are created without a proxy. Attach real proxies in bulk from <b style={{ color: T.text }}>Proxies → Assign to profiles</b> (round-robin, aligns locale to each proxy's country).</div>
         </div>
         <div className="ps-drawer-foot">
           <button className="ps-btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
@@ -1206,37 +1221,156 @@ function BulkModal({ onClose, onCreate, folder, defaultEngine }) {
   );
 }
 
-/* ---- Proxies view ------------------------------------------------ */
-function ProxiesView({ profiles }) {
-  const proxies = useMemo(() => {
-    const map = {};
-    profiles.filter(p => p.proxy).forEach(p => { const k = p.proxy.host; if (!map[k]) map[k] = { ...p.proxy, used: 0 }; map[k].used++; });
-    return Object.values(map);
-  }, [profiles]);
+/* ---- Proxies view: a managed pool (import, test, assign) --------- */
+function ProxyStatus({ p }) {
+  const s = p.status;
+  if (s === "ok") return <span className="ps-pill ok" title={p.lastCheck?.ip || ""}><Check size={12} /> {p.lastCheck?.country || "OK"}{p.lastCheck?.latencyMs ? ` · ${p.lastCheck.latencyMs}ms` : ""}</span>;
+  if (s === "failed") return <span className="ps-pill warn" title={p.lastCheck?.error || ""}><ShieldAlert size={12} /> Failed</span>;
+  if (s === "skipped") return <span className="ps-pill" title={p.lastCheck?.error || ""} style={{ background: T.violetDim, color: T.lilac }}><Circle size={10} /> SOCKS</span>;
+  return <span className="ps-pill" style={{ color: T.dim }}><Circle size={10} /> Untested</span>;
+}
+
+function ProxiesView({ profiles, live, refresh }) {
+  const [pool, setPool] = useState([]);
+  const [importOpen, setImportOpen] = useState(false);
+  const [testing, setTesting] = useState(new Set());
+  const [busy, setBusy] = useState("");
+
+  const load = async () => { try { setPool(await api.listProxies()); } catch { /* offline */ } };
+  useEffect(() => { if (live) load(); }, [live]);
+
+  // Demo mode: no engine, so show the proxies derived from profiles, read-only.
+  if (!live) {
+    const derived = Object.values(profiles.filter(p => p.proxy).reduce((m, p) => {
+      const k = p.proxy.host; (m[k] ||= { ...p.proxy, used: 0 }).used++; return m;
+    }, {}));
+    return (
+      <div className="ps-scroll">
+        <div className="ps-toolbar" style={{ paddingLeft: 0, paddingRight: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: T.muted }}>Proxy pool</div>
+        </div>
+        <div className="ps-hint"><Globe size={12} /> Start the engine (<code>persona serve</code>) to import, test and assign a real proxy pool. Showing proxies in use by current profiles.</div>
+        {derived.length > 0 && (
+          <table className="ps-table" style={{ marginTop: 12 }}>
+            <thead><tr><th>Host</th><th>Type</th><th>Country</th><th>Used by</th></tr></thead>
+            <tbody>{derived.map((x, i) => (
+              <tr key={i}><td className="ps-mono">{x.host}:{x.port}</td><td><span className="ps-os">{x.type}</span></td><td className="ps-mono">{x.country}</td><td className="ps-mono dim">{x.used}</td></tr>
+            ))}</tbody>
+          </table>
+        )}
+      </div>
+    );
+  }
+
+  const testOne = async (id) => {
+    setTesting(s => new Set(s).add(id));
+    try { await api.testProxy(id); await load(); }
+    catch (e) { alert("Test failed: " + e.message); }
+    setTesting(s => { const n = new Set(s); n.delete(id); return n; });
+  };
+  const testAll = async () => {
+    setBusy("test");
+    for (const p of pool) { try { await api.testProxy(p.id); } catch { /* keep going */ } }
+    await load(); setBusy("");
+  };
+  const del = async (id) => { try { await api.deleteProxy(id); await load(); } catch (e) { alert(e.message); } };
+  const assign = async () => {
+    if (!pool.length) return;
+    if (!confirm(`Assign these ${pool.length} proxies round-robin across all ${profiles.length} profiles? Each profile's locale/timezone will align to its proxy's country.`)) return;
+    setBusy("assign");
+    try { const r = await api.assignProxies(); alert(`Assigned proxies to ${r.assigned} profile(s).`); await refresh(); }
+    catch (e) { alert("Assign failed: " + e.message); }
+    setBusy("");
+  };
+
+  const okCount = pool.filter(p => p.status === "ok").length;
   return (
     <div className="ps-scroll">
       <div className="ps-toolbar" style={{ paddingLeft: 0, paddingRight: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: T.muted }}>Proxy pool</div>
-        <div style={{ flex: 1 }} /><button className="ps-btn ghost sm"><Plus size={13} /> Add proxy</button>
+        <div style={{ fontSize: 13, fontWeight: 600, color: T.muted }}>
+          Proxy pool <span className="ps-mono dim">· {pool.length} total{okCount ? ` · ${okCount} live` : ""}</span>
+        </div>
+        <div style={{ flex: 1 }} />
+        <button className="ps-btn ghost sm" disabled={!pool.length || busy === "test"} onClick={testAll}>
+          {busy === "test" ? <><RefreshCw size={13} className="ps-spin" /> Testing…</> : <><Wifi size={13} /> Test all</>}
+        </button>
+        <button className="ps-btn ghost sm" disabled={!pool.length || !profiles.length || busy === "assign"} onClick={assign}>
+          {busy === "assign" ? <><RefreshCw size={13} className="ps-spin" /> Assigning…</> : <><ArrowRight size={13} /> Assign to profiles</>}
+        </button>
+        <button className="ps-btn primary sm" onClick={() => setImportOpen(true)}><Plus size={13} /> Import proxies</button>
       </div>
-      {proxies.length === 0
-        ? <div className="ps-empty"><Globe size={26} color={T.dim} /><div>No proxies yet — profiles connect directly.</div></div>
+
+      {pool.length === 0
+        ? <div className="ps-empty"><Globe size={26} color={T.dim} /><div>No proxies yet.</div>
+            <button className="ps-btn primary sm" onClick={() => setImportOpen(true)}><Plus size={14} /> Import proxies</button></div>
         : (
           <table className="ps-table">
-            <thead><tr><th>Host</th><th>Type</th><th>Country</th><th>Used by</th><th>Status</th></tr></thead>
+            <thead><tr><th>Host</th><th>Type</th><th>Country</th><th>Auth</th><th>Status</th><th style={{ width: 120, textAlign: "right" }}>Actions</th></tr></thead>
             <tbody>
-              {proxies.map((x, i) => (
-                <tr key={i} className="ps-rise" style={{ animationDelay: `${i * 28}ms` }}>
+              {pool.map((x, i) => (
+                <tr key={x.id} className="ps-rise" style={{ animationDelay: `${Math.min(i, 12) * 28}ms` }}>
                   <td className="ps-mono">{x.host}:{x.port}</td>
                   <td><span className="ps-os">{x.type}</span></td>
-                  <td className="ps-mono">{x.country}</td>
-                  <td className="ps-mono dim">{x.used} profile{x.used > 1 ? "s" : ""}</td>
-                  <td><span className="ps-pill ok"><Check size={12} /> Live</span></td>
+                  <td className="ps-mono">{x.country || "—"}</td>
+                  <td className="ps-mono dim">{x.user ? "user:•••" : "none"}</td>
+                  <td><ProxyStatus p={x} /></td>
+                  <td>
+                    <div className="ps-actions">
+                      <button title="Test" className="run" disabled={testing.has(x.id)} onClick={() => testOne(x.id)}>
+                        {testing.has(x.id) ? <RefreshCw size={13} className="ps-spin" /> : <Wifi size={13} />}
+                      </button>
+                      <button title="Delete" className="del" onClick={() => del(x.id)}><Trash2 size={13} /></button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
+      <div className="ps-hint"><Globe size={12} /> Import a list, test which are live, then <b style={{ color: T.text }}>Assign to profiles</b> spreads them round-robin and aligns each profile's locale/timezone to its proxy country. Health checks run over HTTP(S); SOCKS proxies are tested when you run a profile's proxy test.</div>
+
+      {importOpen && <ImportProxiesModal onClose={() => setImportOpen(false)} onImport={async (text) => {
+        const r = await api.addProxies(text); await load(); return r;
+      }} />}
+    </div>
+  );
+}
+
+function ImportProxiesModal({ onClose, onImport }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const lines = text.split("\n").filter(l => l.trim() && !l.trim().startsWith("#")).length;
+  const submit = async () => {
+    setBusy(true);
+    try { const r = await onImport(text); alert(`Added ${r.added} proxy(ies). Pool now has ${r.total}.`); onClose(); }
+    catch (e) { alert("Import failed: " + e.message); setBusy(false); }
+  };
+  return (
+    <div className="ps-overlay center" onClick={busy ? undefined : onClose}>
+      <div className="ps-modal ps-pop" onClick={e => e.stopPropagation()} style={{ maxWidth: 540 }}>
+        <div className="ps-drawer-h">
+          <div><div className="ps-eyebrow">Proxy pool</div><div className="ps-drawer-title">Import proxies</div></div>
+          <button className="ps-x" onClick={onClose} disabled={busy}><X size={18} /></button>
+        </div>
+        <div style={{ padding: 20 }}>
+          <Field label="Paste one proxy per line">
+            <textarea className="ps-in mono" rows={9} value={text} onChange={e => setText(e.target.value)}
+              placeholder={"host:port\nhost:port:user:pass\nuser:pass@host:port\nhttp://user:pass@host:port\nsocks5://host:port\nhost:port:user:pass:US"} />
+          </Field>
+          <label className={"ps-btn ghost sm" + (busy ? " disabled" : "")} style={{ marginTop: 8 }}>
+            <Upload size={13} /> Load from file
+            <input type="file" accept=".txt,.csv,.json" style={{ display: "none" }} disabled={busy}
+              onChange={async e => { const f = e.target.files?.[0]; if (f) setText(await f.text()); e.target.value = ""; }} />
+          </label>
+          <div className="ps-hint"><Server size={12} /> Understands <code>host:port</code>, <code>host:port:user:pass</code>, <code>user:pass@host:port</code> and <code>scheme://…</code>, with an optional trailing country code. {lines > 0 ? <b style={{ color: T.text }}>{lines} line{lines === 1 ? "" : "s"} detected.</b> : ""}</div>
+        </div>
+        <div className="ps-drawer-foot">
+          <button className="ps-btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="ps-btn primary" onClick={submit} disabled={busy || !lines}>
+            {busy ? <><RefreshCw size={15} className="ps-spin" /> Importing…</> : <><Plus size={15} /> Add {lines || ""} prox{lines === 1 ? "y" : "ies"}</>}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -54,4 +54,12 @@ export const api = {
   bulkUpdate: (ids, patch) => req("POST", "/api/profiles/bulk", { ids, patch }),
   // Bulk create at scale: save a chunk of generated profiles in one request.
   batchCreate: (profiles) => req("POST", "/api/profiles/batch", { profiles }),
+  // Import profiles exported from GoLogin / AdsPower / Multilogin.
+  importProfiles: (text) => req("POST", "/api/profiles/import", { text }),
+  // Proxy pool: import, list, test and assign proxies across profiles.
+  listProxies: () => req("GET", "/api/proxies"),
+  addProxies: (text) => req("POST", "/api/proxies", { text }),
+  deleteProxy: (id) => req("DELETE", `/api/proxies/${id}`),
+  testProxy: (id) => req("POST", `/api/proxies/${id}/test`),
+  assignProxies: (profileIds, proxyIds) => req("POST", "/api/proxies/assign", { profileIds, proxyIds }),
 };

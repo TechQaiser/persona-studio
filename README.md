@@ -62,6 +62,7 @@ persona-studio/
 | 🔎 **Trust checker** | Grades the *real* browser against the checks a fingerprinter runs |
 | ✨ **Auto-adjust** | One click aligns a profile to what its browser actually presents — grade jumps to A |
 | 📡 **Proxy & leak test** | Exit IP, country and timezone match + WebRTC leak detection |
+| 🌐 **Proxy pool** | Import, health-check and assign proxies round-robin across profiles |
 | 🔐 **TLS/JA3 check** | Reads the handshake fingerprint — the one layer JS injection can't reach |
 | 🔑 **Encrypted vault** | Proxy passwords encrypted at rest behind a master password |
 | 🧩 **Extensions** | Per-profile unpacked extensions, isolated from every other profile |
@@ -236,11 +237,14 @@ stays the same manager over all of them.
       shows so a low trust grade jumps to A
 - [x] Bulk create at scale (`persona bulk-create`, dashboard) — thousands of
       coherent profiles across OS / country / browser, with a paginated grid
+- [x] Proxy pool — import a list, health-check it, and assign round-robin across
+      profiles (aligning each profile's locale to its proxy country)
+- [x] Dashboard-side import (GoLogin / AdsPower / Multilogin) — an Import button
+      that maps each export to a coherent profile
 
 **Next**
 
 - [ ] DNS leak checker (needs a resolver-side probe, not just the browser)
-- [ ] Dashboard-side import (the CLI importer lands in the engine store today)
 - [ ] Cookie warm-up presets per vertical (ads, e-commerce, crypto)
 - [ ] Scheduled warm-up (recurring, unattended)
 - [ ] Cloud sync + team roles — deliberately unbuilt: it needs a hosted backend,

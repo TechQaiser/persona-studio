@@ -5,6 +5,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Proxy pool — import, test, assign** (`proxypool.py`, `/api/proxies*`):
+  a managed pool the dashboard's Proxies page now drives for real. Import a
+  pasted list or file in any common layout (`host:port`, `host:port:user:pass`,
+  `user:pass@host:port`, `scheme://…`, optional trailing country code),
+  health-check each one over HTTP(S) without a browser (exit IP/country/latency),
+  and **assign them round-robin across profiles** — which also aligns each
+  profile's locale/timezone to its proxy's country. Bulk-created profiles start
+  proxy-less and get real proxies from here, instead of the old placeholder
+  hosts.
+- **Dashboard-side import** (`/api/profiles/import`, `to_dashboard_profile`):
+  the GoLogin / AdsPower / Multilogin importer is now wired to an **Import**
+  button in the dashboard — pick an export file, and each profile is mapped to a
+  coherent identity, saved, and flagged for review if anything didn't line up.
+  (Previously the importer lived in the CLI/engine store only.)
 - **Auto-adjust — align a profile to reality** (`persona align`, `probe.py`):
   a one-click fix for a low trust grade. It opens the profile, reads back what
   the browser *actually* presents (platform, CPU, memory, GPU, screen, fonts,
