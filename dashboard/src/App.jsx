@@ -171,6 +171,7 @@ export default function App() {
   const [editor, setEditor] = useState(null);
   const [bulk, setBulk] = useState(false);
   const [sync, setSync] = useState(false);   // "edit all selected" modal
+  const [filters, setFilters] = useState({ status: "", engine: "", os: "", proxy: "" });
   const [mode, setMode] = useState("connecting");   // connecting | live | demo
   const [engines, setEngines] = useState(null);      // {name: installed} from API
   const [defaultEngine, setDefaultEngine] = useState(ENGINE_ORDER[0]); // new-profile default
@@ -210,8 +211,12 @@ export default function App() {
     profiles.filter(p =>
       (folder === "All profiles" || p.folder === folder) &&
       (p.name.toLowerCase().includes(query.toLowerCase()) ||
-       p.tags.some(t => t.includes(query.toLowerCase())))),
-    [profiles, folder, query]);
+       p.tags.some(t => t.includes(query.toLowerCase()))) &&
+      (!filters.status || p.status === filters.status) &&
+      (!filters.engine || (p.engine || "playwright") === filters.engine) &&
+      (!filters.os || p.os === filters.os) &&
+      (!filters.proxy || (filters.proxy === "with" ? !!p.proxy : !p.proxy))),
+    [profiles, folder, query, filters]);
 
   const running = profiles.filter(p => p.status === "running").length;
   const proxyCount = new Set(profiles.filter(p => p.proxy).map(p => p.proxy.host)).size;
@@ -311,7 +316,7 @@ export default function App() {
           </div>
 
           {view === "profiles" && (
-            <ProfilesView {...{ filtered, query, setQuery, folder, sel, setSel, toggleSel, allSel, toggleRun, clone, remove, setEditor, setProfiles, setSync, live, refresh }} />
+            <ProfilesView {...{ filtered, query, setQuery, folder, sel, setSel, toggleSel, allSel, toggleRun, clone, remove, setEditor, setProfiles, setSync, filters, setFilters, live, refresh }} />
           )}
           {view === "engines" && <EnginesView engines={engines} live={live} />}
           {view === "proxies" && <ProxiesView profiles={profiles} />}
@@ -347,7 +352,24 @@ export default function App() {
 }
 
 /* ---- Profiles view ----------------------------------------------- */
-function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSel, allSel, toggleRun, clone, remove, setEditor, setProfiles, setSync, live, refresh }) {
+function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSel, allSel, toggleRun, clone, remove, setEditor, setProfiles, setSync, filters, setFilters, live, refresh }) {
+  const [filterOpen, setFilterOpen] = useState(false);
+  const activeFilters = Object.values(filters).filter(Boolean).length;
+  const setFilter = (key, value) => setFilters(f => ({ ...f, [key]: f[key] === value ? "" : value }));
+  const clearFilters = () => setFilters({ status: "", engine: "", os: "", proxy: "" });
+
+  const FilterRow = ({ label, options, value, onPick }) => (
+    <div className="ps-filter-row">
+      <span className="ps-filter-label">{label}</span>
+      <div className="ps-filter-opts">
+        {options.map(([val, text]) => (
+          <button key={val} className={"ps-chip" + (value === val ? " on" : "")}
+            onClick={() => onPick(val)}>{text}</button>
+        ))}
+      </div>
+    </div>
+  );
+
   return (
     <>
       <div className="ps-toolbar">
@@ -365,16 +387,50 @@ function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSe
             <button className="danger" onClick={async () => { const ids = [...sel]; setSel(new Set()); if (live) { for (const id of ids) { try { await api.remove(id); } catch {} } await refresh(); } else { setProfiles(ps => ps.filter(p => !ids.includes(p.id))); } }}><Trash2 size={13} /> Delete</button>
           </div>
         )}
-        <button className="ps-btn ghost sm"><Filter size={13} /> Filter</button>
+        <div className="ps-filter-wrap">
+          <button className={"ps-btn ghost sm" + (activeFilters ? " active" : "")}
+            onClick={() => setFilterOpen(o => !o)}>
+            <Filter size={13} /> Filter{activeFilters ? ` · ${activeFilters}` : ""}
+          </button>
+          {filterOpen && (
+            <>
+              <div className="ps-filter-scrim" onClick={() => setFilterOpen(false)} />
+              <div className="ps-filter-pop">
+                <div className="ps-filter-head">
+                  <span>Filter profiles</span>
+                  {activeFilters > 0 && <button className="ps-filter-clear" onClick={clearFilters}>Clear all</button>}
+                </div>
+                <FilterRow label="Status" value={filters.status} onPick={v => setFilter("status", v)}
+                  options={[["running", "Running"], ["stopped", "Stopped"]]} />
+                <FilterRow label="Engine" value={filters.engine} onPick={v => setFilter("engine", v)}
+                  options={ENGINE_ORDER.map(en => [en, ENGINE_META[en].label])} />
+                <FilterRow label="OS" value={filters.os} onPick={v => setFilter("os", v)}
+                  options={OS_LIST.map(o => [o, o])} />
+                <FilterRow label="Proxy" value={filters.proxy} onPick={v => setFilter("proxy", v)}
+                  options={[["with", "With proxy"], ["without", "Direct"]]} />
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="ps-scroll">
         {filtered.length === 0 ? (
+          (activeFilters || query) ? (
+            <div className="ps-empty">
+              <Filter size={28} color={T.dim} />
+              <div>No profiles match your {activeFilters ? "filters" : "search"}.</div>
+              <button className="ps-btn ghost sm" onClick={() => { clearFilters(); setQuery(""); }}>
+                <X size={14} /> Clear {activeFilters ? "filters" : "search"}
+              </button>
+            </div>
+          ) : (
           <div className="ps-empty">
             <Layers size={28} color={T.dim} />
             <div>No profiles here yet.</div>
             <button className="ps-btn primary sm" onClick={() => setEditor(newProfile(folder))}><Plus size={14} /> Create one</button>
           </div>
+          )
         ) : (
           <table className="ps-table">
             <thead>
@@ -1250,6 +1306,27 @@ select.ps-in { cursor: pointer; }
 .ps-check em { font-style: normal; color: ${T.dim}; }
 .ps-spin { animation: ps-rot 1s linear infinite; }
 @keyframes ps-rot { to { transform: rotate(360deg); } }
+.ps-btn.active { border-color: ${T.violet}; color: ${T.lilac}; background: ${T.violet}1a; }
+.ps-filter-wrap { position: relative; }
+.ps-filter-scrim { position: fixed; inset: 0; z-index: 20; }
+.ps-filter-pop { position: absolute; right: 0; top: calc(100% + 8px); z-index: 21; width: 300px;
+  background: ${T.surface}; border: 1px solid ${T.line}; border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0,0,0,.45); padding: 14px; animation: ps-pop .12s ease; }
+.ps-filter-head { display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; font-weight: 700; color: ${T.text}; margin-bottom: 10px; }
+.ps-filter-clear { background: none; border: none; color: ${T.lilac}; font-size: 11px;
+  cursor: pointer; font-family: inherit; }
+.ps-filter-clear:hover { text-decoration: underline; }
+.ps-filter-row { margin-bottom: 12px; }
+.ps-filter-label { display: block; font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: .06em; color: ${T.muted}; margin-bottom: 6px; }
+.ps-filter-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.ps-chip { background: ${T.bg}; border: 1px solid ${T.line}; border-radius: 8px;
+  padding: 5px 10px; font-size: 12px; color: ${T.muted}; cursor: pointer;
+  font-family: inherit; transition: .12s; }
+.ps-chip:hover { border-color: #33334f; color: ${T.text}; }
+.ps-chip.on { background: ${T.violet}; border-color: ${T.violet}; color: #fff; }
+@keyframes ps-pop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 .ps-cookie-actions .ps-btn.disabled { opacity: .5; cursor: progress; }
 .ps-hint code { font-family: ${FONT.mono}; font-size: 11px; color: ${T.text}; }
 .ps-hint { display: flex; align-items: flex-start; gap: 8px; font-size: 11.5px; color: ${T.muted}; margin-top: 12px; line-height: 1.55; background: ${T.bg}; border: 1px solid ${T.lineSoft}; padding: 11px 13px; border-radius: 10px; }
