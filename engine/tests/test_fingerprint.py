@@ -117,3 +117,29 @@ def test_fingerprints_saved_before_these_fields_existed_still_load():
         del d[gone]
     restored = Fingerprint.from_dict(d)
     assert restored.fonts == [] and restored.cameras == 1
+
+
+def test_webgl_plausible_accepts_real_host_gpus():
+    from persona.fingerprint import webgl_plausible
+    # A machine's actual GPU (not in the curated pool) is still coherent for its OS.
+    assert webgl_plausible("windows", "Google Inc. (NVIDIA)",
+                           "ANGLE (NVIDIA, NVIDIA GeForce RTX 3050 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)")
+    assert webgl_plausible("macos", "Google Inc. (Apple)",
+                           "ANGLE (Apple, Apple M3 Pro, OpenGL 4.1)")
+
+
+def test_webgl_plausible_rejects_wrong_os():
+    from persona.fingerprint import webgl_plausible
+    # An Apple/OpenGL GPU on Windows, or a D3D11 GPU on macOS, is still a tell.
+    assert not webgl_plausible("windows", "Google Inc. (Apple)",
+                               "ANGLE (Apple, Apple M1, OpenGL 4.1)")
+    assert not webgl_plausible("macos", "Google Inc. (NVIDIA)",
+                               "ANGLE (NVIDIA, RTX 3060 Direct3D11, D3D11)")
+
+
+def test_real_screen_size_is_coherent():
+    # A profile aligned to an ultrawide keeps a resolution outside the curated list.
+    fp = generate(seed=1, os="windows")
+    fp.screen_width, fp.screen_height = 3440, 1440
+    fp.viewport_width, fp.viewport_height = 3440, 1400
+    assert "screen resolution" not in " ".join(validate(fp))

@@ -106,15 +106,35 @@ const ENGINE_META = {
 };
 
 /* ---- coherence check (mirrors persona/fingerprint.validate) ------ */
+// A GPU is coherent if it's one we offer, or if its graphics API matches the OS
+// (Windows → Direct3D, macOS/Linux → desktop OpenGL). The second clause lets a
+// profile carry the machine's real GPU after "Auto-adjust" without a false flag.
+function webglPlausible(os, renderer) {
+  if (!renderer) return true;
+  if (GPUS[os]?.includes(renderer)) return true;
+  const r = renderer.toLowerCase();
+  const d3d = r.includes("direct3d") || r.includes("d3d11");
+  const gl = r.includes("opengl");
+  if (os === "Windows") return d3d;
+  if (os === "macOS") return gl && !d3d;
+  if (os === "Linux") return gl && !d3d;
+  if (os === "Android") return r.includes("opengl es") || r.includes("adreno") || r.includes("mali");
+  return false;
+}
+function screenPlausible(os, screen) {
+  if (!screen || SCREENS[os]?.includes(screen)) return true;
+  const [w, h] = screen.split("x").map(Number);
+  return w >= 320 && w <= 8000 && h >= 480 && h <= 5000;   // any real display
+}
 function coherence(p) {
   const issues = [];
-  if (p.webglRenderer && !GPUS[p.os].includes(p.webglRenderer))
+  if (p.webglRenderer && !webglPlausible(p.os, p.webglRenderer))
     issues.push("GPU doesn't belong to " + p.os);
-  if (p.screen && !SCREENS[p.os].includes(p.screen))
+  if (p.screen && !screenPlausible(p.os, p.screen))
     issues.push("Screen resolution unusual for " + p.os);
   if (p.locale && p.timezone && LOCALES[p.locale] !== p.timezone)
     issues.push("Timezone doesn't match locale");
-  if (p.cores && !CORES[p.os].includes(Number(p.cores)))
+  if (p.cores && !(Number(p.cores) >= 2 && Number(p.cores) <= 128))
     issues.push("CPU cores atypical for " + p.os);
   if (p.proxy?.country && COUNTRY_LOCALE[p.proxy.country] &&
       COUNTRY_LOCALE[p.proxy.country] !== p.locale)
@@ -155,11 +175,20 @@ function mk(name, folder, status, os, tags, country) {
     lastActive: status === "running" ? "now" : ["2h ago", "yesterday", "3d ago"][name.length % 3],
   };
 }
-function uaFor(os) {
+function uaFor(os, chrome = "128.0.0.0") {
   const tok = { Windows: "Windows NT 10.0; Win64; x64", macOS: "Macintosh; Intel Mac OS X 10_15_7", Linux: "X11; Linux x86_64", Android: "Linux; Android 13; Pixel 7" }[os];
   const mob = os === "Android" ? " Mobile" : "";
-  return `Mozilla/5.0 (${tok}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0${mob} Safari/537.36`;
+  return `Mozilla/5.0 (${tok}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome}${mob} Safari/537.36`;
 }
+// Guess the WebGL vendor string from a renderer's GPU family (mirrors server).
+function vendorFor(renderer) {
+  const r = (renderer || "").toLowerCase();
+  for (const [tok, name] of [["nvidia", "NVIDIA"], ["radeon", "AMD"], ["amd", "AMD"],
+    ["intel", "Intel"], ["apple", "Apple"], ["adreno", "Qualcomm"], ["mali", "ARM"]])
+    if (r.includes(tok)) return `Google Inc. (${name})`;
+  return "Google Inc.";
+}
+const CHROME_VERSIONS = ["125.0.0.0", "126.0.0.0", "127.0.0.0", "128.0.0.0"];
 
 /* ================================================================== */
 export default function App() {
@@ -201,11 +230,14 @@ export default function App() {
   useEffect(() => {
     if (!live) return;
     let cancelled = false;
+    // Poll less often once the list is large — refetching thousands of profiles
+    // every few seconds is wasteful, and run-status doesn't change that fast.
+    const every = profiles.length > 500 ? 12000 : 3000;
     const id = setInterval(() => {
       if (!cancelled && !editor && !bulk && !sync) refresh().catch(() => {});
-    }, 3000);
+    }, every);
     return () => { cancelled = true; clearInterval(id); };
-  }, [live, editor, bulk, sync]);
+  }, [live, editor, bulk, sync, profiles.length > 500]);
 
   const filtered = useMemo(() =>
     profiles.filter(p =>
@@ -218,8 +250,12 @@ export default function App() {
       (!filters.proxy || (filters.proxy === "with" ? !!p.proxy : !p.proxy))),
     [profiles, folder, query, filters]);
 
-  const running = profiles.filter(p => p.status === "running").length;
-  const proxyCount = new Set(profiles.filter(p => p.proxy).map(p => p.proxy.host)).size;
+  // Memoised so a 10k-profile list isn't re-scanned on every render / poll tick.
+  const { running, proxyCount, coherentCount } = useMemo(() => ({
+    running: profiles.filter(p => p.status === "running").length,
+    proxyCount: new Set(profiles.filter(p => p.proxy).map(p => p.proxy.host)).size,
+    coherentCount: profiles.filter(p => coherence(p).length === 0).length,
+  }), [profiles]);
 
   const toggleRun = async (id) => {
     const p = profiles.find(x => x.id === id);
@@ -309,7 +345,7 @@ export default function App() {
             <Stat icon={<Activity size={16} />} label="Running" value={running} accent={T.mint} pulse={running > 0} />
             <Stat icon={<Server size={16} />} label="Proxies" value={proxyCount} accent={T.lilac} />
             <Stat icon={<ShieldCheck size={16} />} label="Coherent"
-              value={profiles.filter(p => coherence(p).length === 0).length + "/" + profiles.length} accent={T.violet} />
+              value={coherentCount + "/" + profiles.length} accent={T.violet} />
             <div style={{ flex: 1 }} />
             <button className="ps-btn ghost" onClick={() => setBulk(true)}><Boxes size={14} /> Bulk create</button>
             <button className="ps-btn primary" onClick={() => setEditor(newProfile(folder, defaultEngine))}><Plus size={15} /> New profile</button>
@@ -342,11 +378,20 @@ export default function App() {
         setSel(new Set());
         setSync(false);
       }} />}
-      {bulk && <BulkModal onClose={() => setBulk(false)} folder={folder} onCreate={async (list) => {
-        if (live) { for (const p of list) { try { await api.create({ ...p, id: undefined, _new: true }); } catch {} } await refresh(); }
-        else { setProfiles(ps => [...ps, ...list]); }
-        setBulk(false);
-      }} />}
+      {bulk && <BulkModal onClose={() => setBulk(false)} folder={folder} defaultEngine={defaultEngine}
+        onCreate={async (list, onProgress) => {
+          if (live) {
+            const CHUNK = 500;   // one request per chunk keeps 10k creates snappy
+            for (let i = 0; i < list.length; i += CHUNK) {
+              await api.batchCreate(list.slice(i, i + CHUNK));
+              onProgress?.(Math.min(list.length, i + CHUNK), list.length);
+            }
+            await refresh();
+          } else {
+            setProfiles(ps => [...ps, ...list]);
+            onProgress?.(list.length, list.length);
+          }
+        }} />}
     </div>
   );
 }
@@ -357,6 +402,14 @@ function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSe
   const activeFilters = Object.values(filters).filter(Boolean).length;
   const setFilter = (key, value) => setFilters(f => ({ ...f, [key]: f[key] === value ? "" : value }));
   const clearFilters = () => setFilters({ status: "", engine: "", os: "", proxy: "" });
+
+  // Pagination keeps the grid responsive when there are thousands of profiles.
+  const PAGE = 100;
+  const [page, setPage] = useState(0);
+  useEffect(() => { setPage(0); }, [query, folder, filters.status, filters.engine, filters.os, filters.proxy]);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE));
+  const cur = Math.min(page, pageCount - 1);
+  const rows = filtered.slice(cur * PAGE, cur * PAGE + PAGE);
 
   const FilterRow = ({ label, options, value, onPick }) => (
     <div className="ps-filter-row">
@@ -443,7 +496,7 @@ function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSe
               </tr>
             </thead>
             <tbody>
-              {filtered.map((p, i) => {
+              {rows.map((p, i) => {
                 const iss = coherence(p);
                 return (
                   <tr key={p.id} className={"ps-rise" + (sel.has(p.id) ? " sel" : "")} style={{ animationDelay: `${Math.min(i, 12) * 28}ms` }}>
@@ -491,6 +544,17 @@ function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSe
               })}
             </tbody>
           </table>
+        )}
+        {pageCount > 1 && (
+          <div className="ps-pager">
+            <button className="ps-btn ghost sm" disabled={cur === 0} onClick={() => setPage(0)}>« First</button>
+            <button className="ps-btn ghost sm" disabled={cur === 0} onClick={() => setPage(cur - 1)}>‹ Prev</button>
+            <span className="ps-pager-info">
+              Page <b>{cur + 1}</b> of {pageCount} · <b>{filtered.length.toLocaleString()}</b> profiles
+            </span>
+            <button className="ps-btn ghost sm" disabled={cur >= pageCount - 1} onClick={() => setPage(cur + 1)}>Next ›</button>
+            <button className="ps-btn ghost sm" disabled={cur >= pageCount - 1} onClick={() => setPage(pageCount - 1)}>Last »</button>
+          </div>
         )}
       </div>
     </>
@@ -624,8 +688,25 @@ function ProbePanel({ probe, kind }) {
 
   const d = probe.data || {};
   const checks = d.checks || [];
+  const gColor = (s) => (s >= 95 ? T.mint : s >= 70 ? T.amber : T.red);
   return (
     <div className="ps-probe">
+      {d.before && d.after && (
+        <div className="ps-probe-head">
+          <span className="ps-probe-score" style={{ color: gColor(d.before.score) }}>{d.before.grade} {d.before.score}%</span>
+          <ArrowRight size={14} color={T.dim} />
+          <span className="ps-probe-score" style={{ color: gColor(d.after.score) }}>{d.after.grade} {d.after.score}%</span>
+          <span>{d.after.passed}/{d.after.total} checks passed</span>
+        </div>
+      )}
+      {d.changed && (
+        <div className="ps-check ok">
+          <Sparkles size={12} />
+          <span>{d.changed.length
+            ? <>Aligned <em>{d.changed.join(", ")}</em> to the real browser{d.os ? ` · now reads as ${d.os}` : ""}.</>
+            : "Already matched the browser — nothing to change."}</span>
+        </div>
+      )}
       {d.score !== undefined && (
         <div className="ps-probe-head">
           <span className="ps-probe-score" style={{ color: d.score >= 95 ? T.mint : d.score >= 70 ? T.amber : T.red }}>
@@ -698,6 +779,17 @@ function Editor({ profile, live, onClose, onSave }) {
     setProbe({ kind, state: "running" });
     try { setProbe({ kind, state: "done", data: await fn() }); }
     catch (e) { setProbe({ kind, state: "error", data: e.message }); }
+  };
+
+  // Auto-adjust: align the profile to what its browser really shows, then pull
+  // the rewritten values straight back into the editor so you see the change.
+  const autoAdjust = async () => {
+    setProbe({ kind: "align", state: "running" });
+    try {
+      const res = await api.align(p.id);
+      if (res.profile) setP(x => ({ ...x, ...res.profile }));
+      setProbe({ kind: "align", state: "done", data: res });
+    } catch (e) { setProbe({ kind: "align", state: "error", data: e.message }); }
   };
 
   const importCookies = async (file) => {
@@ -820,12 +912,17 @@ function Editor({ profile, live, onClose, onSave }) {
                   onClick={() => runProbe("tls", () => api.tls(p.id))}>
                   <Wifi size={13} /> Check TLS / JA3
                 </button>
+                <button className="ps-btn primary sm" disabled={!cookiesReady || probe?.state === "running"}
+                  onClick={autoAdjust} title="Rewrite mismatched values to match what the browser actually presents">
+                  <Sparkles size={13} /> Auto-adjust
+                </button>
               </div>
               <ProbePanel probe={probe} kind="trust" />
               <ProbePanel probe={probe} kind="tls" />
+              <ProbePanel probe={probe} kind="align" />
               <div className="ps-hint"><ShieldCheck size={12} /> {cookiesReady
-                ? "Trust check runs what a fingerprinting script reads (webdriver, plugins, UA vs platform, WebGL, fonts, canvas). TLS/JA3 reads the handshake itself — the one layer JavaScript can't touch, so it's the honest test of the engine, not the injected script."
-                : "Save the profile and start the engine to grade the real browser."}</div>
+                ? "Trust check grades the real browser; TLS/JA3 reads the handshake JavaScript can't touch. Auto-adjust closes the gap — it rewrites platform, CPU, GPU, fonts and the rest to what the browser actually shows (regenerating the OS identity if the engine renders a different one), so nothing contradicts."
+                : "Save the profile and start the engine to grade — and auto-adjust — the real browser."}</div>
             </>
           )}
 
@@ -994,37 +1091,115 @@ function SyncModal({ ids, onClose, onApply }) {
 }
 
 /* ---- Bulk create ------------------------------------------------- */
-function BulkModal({ onClose, onCreate, folder }) {
-  const [n, setN] = useState(10);
-  const [os, setOs] = useState("Windows");
-  const [prefix, setPrefix] = useState("Batch");
-  const [country, setCountry] = useState("US");
-  const create = () => {
-    const list = Array.from({ length: n }, (_, i) =>
-      mk(`${prefix}-${String(i + 1).padStart(2, "0")}`, folder === "All profiles" ? "Facebook Ads" : folder, "stopped", os, ["bulk"], country));
-    onCreate(list);
-  };
+// A row of toggle chips for picking several values (OS, country, browser).
+function ChipPick({ options, value, onToggle }) {
   return (
-    <div className="ps-overlay center" onClick={onClose}>
-      <div className="ps-modal ps-pop" onClick={e => e.stopPropagation()}>
+    <div className="ps-chiprow">
+      {options.map(o => (
+        <button key={o} type="button" className={"ps-chip-btn" + (value.includes(o) ? " on" : "")}
+          onClick={() => onToggle(o)}>{value.includes(o) && <Check size={11} />}{o}</button>
+      ))}
+    </div>
+  );
+}
+
+function BulkModal({ onClose, onCreate, folder, defaultEngine }) {
+  const [n, setN] = useState(50);
+  const [oses, setOses] = useState(["Windows"]);
+  const [countries, setCountries] = useState(["US"]);
+  const [browsers, setBrowsers] = useState([...CHROME_VERSIONS]);
+  const [engine, setEngine] = useState(defaultEngine || ENGINE_ORDER[0]);
+  const [randomize, setRandomize] = useState(true);
+  const [useProxy, setUseProxy] = useState(false);
+  const [prefix, setPrefix] = useState("Batch");
+  const [start, setStart] = useState(1);
+  const [tagStr, setTagStr] = useState("bulk");
+  const [busy, setBusy] = useState(false);
+  const [prog, setProg] = useState(0);
+
+  // Keep at least one selected in each multi-pick.
+  const toggle = (setArr) => (v) => setArr(a => a.includes(v) ? (a.length > 1 ? a.filter(x => x !== v) : a) : [...a, v]);
+  const pad = Math.max(2, String(start + n - 1).length);
+
+  const build = () => {
+    const tags = tagStr.split(",").map(s => s.trim()).filter(Boolean);
+    const rnd = (arr) => arr[Math.floor(Math.random() * arr.length)];
+    const pick = (arr, dflt) => randomize ? rnd(arr) : (dflt ?? arr[0]);
+    const list = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const os = oses[i % oses.length];
+      const country = countries[Math.floor(i / oses.length) % countries.length];
+      const chrome = rnd(browsers) || "128.0.0.0";
+      const gpu = pick(GPUS[os]);
+      const locale = COUNTRY_LOCALE[country] || "en-US";
+      list[i] = {
+        name: `${prefix}-${String(start + i).padStart(pad, "0")}`,
+        folder: folder === "All profiles" ? "Facebook Ads" : folder,
+        status: "stopped", os, tags, engine, browser: "Chrome", browserVersion: chrome,
+        userAgent: uaFor(os, chrome), screen: pick(SCREENS[os]),
+        cores: pick(CORES[os], CORES[os][1]), memory: pick(RAM[os], RAM[os][1]),
+        webglVendor: vendorFor(gpu), webglRenderer: gpu,
+        canvas: "Noise", webrtc: "Altered", audio: "Noise", fonts: "Masked",
+        locale, timezone: LOCALES[locale], geo: "Prompt", mediaVideo: 1, mediaAudio: 1, dnt: false,
+        proxy: useProxy ? { type: "HTTP", host: `res-${country.toLowerCase()}.proxy.io`, port: "8080", user: "u", pass: "•••••", country } : null,
+        notes: "", startupUrls: "", extensions: "", lastActive: "never", _new: true,
+      };
+    }
+    return list;
+  };
+
+  const create = async () => {
+    setBusy(true); setProg(0);
+    try { await onCreate(build(), (done) => setProg(done)); onClose(); }
+    catch (e) { alert("Bulk create failed: " + e.message); setBusy(false); }
+  };
+
+  return (
+    <div className="ps-overlay center" onClick={busy ? undefined : onClose}>
+      <div className="ps-modal ps-pop" onClick={e => e.stopPropagation()} style={{ maxWidth: 560 }}>
         <div className="ps-drawer-h">
-          <div><div className="ps-eyebrow">Bulk create</div><div className="ps-drawer-title">Generate many profiles at once</div></div>
-          <button className="ps-x" onClick={onClose}><X size={18} /></button>
+          <div><div className="ps-eyebrow">Bulk create</div><div className="ps-drawer-title">Generate profiles at scale</div></div>
+          <button className="ps-x" onClick={onClose} disabled={busy}><X size={18} /></button>
         </div>
-        <div style={{ padding: 20 }}>
+        <div style={{ padding: 20, maxHeight: "62vh", overflowY: "auto" }}>
           <Row>
-            <Field label="How many"><input type="number" className="ps-in" value={n} min={1} max={200} onChange={e => setN(Math.min(200, Math.max(1, Number(e.target.value))))} /></Field>
-            <Field label="Operating system"><select className="ps-in" value={os} onChange={e => setOs(e.target.value)}>{OS_LIST.map(o => <option key={o}>{o}</option>)}</select></Field>
+            <Field label="How many (up to 10,000)">
+              <input type="number" className="ps-in" value={n} min={1} max={10000}
+                onChange={e => setN(Math.min(10000, Math.max(1, Number(e.target.value) || 1)))} />
+            </Field>
+            <Field label="Launch engine">
+              <select className="ps-in" value={engine} onChange={e => setEngine(e.target.value)}>
+                {ENGINE_ORDER.map(en => <option key={en} value={en}>{ENGINE_META[en].label}{ENGINE_META[en].recommended ? "  ★" : ""}</option>)}
+              </select>
+            </Field>
           </Row>
+
+          <Field label="Operating systems (spread across)"><ChipPick options={OS_LIST} value={oses} onToggle={toggle(setOses)} /></Field>
+          <Field label="Countries / locales (spread across)"><ChipPick options={Object.keys(COUNTRY_LOCALE)} value={countries} onToggle={toggle(setCountries)} /></Field>
+          <Field label="Browser versions (Chrome)"><ChipPick options={CHROME_VERSIONS} value={browsers} onToggle={toggle(setBrowsers)} /></Field>
+
           <Row>
             <Field label="Name prefix"><input className="ps-in" value={prefix} onChange={e => setPrefix(e.target.value)} /></Field>
-            <Field label="Proxy country"><select className="ps-in" value={country} onChange={e => setCountry(e.target.value)}>{Object.keys(COUNTRY_LOCALE).map(c => <option key={c}>{c}</option>)}</select></Field>
+            <Field label="Start number"><input type="number" className="ps-in" value={start} min={0} onChange={e => setStart(Math.max(0, Number(e.target.value) || 0))} /></Field>
+            <Field label="Tags"><input className="ps-in" value={tagStr} onChange={e => setTagStr(e.target.value)} placeholder="bulk, q3" /></Field>
           </Row>
-          <div className="ps-hint"><Boxes size={12} /> Each profile gets its own coherent fingerprint & session. Preview: <b style={{ color: T.text }}>{prefix}-01 … {prefix}-{String(n).padStart(2, "0")}</b></div>
+
+          <Row>
+            <Field label="Vary GPU / screen / CPU / RAM">
+              <button className={"ps-toggle" + (randomize ? " on" : "")} onClick={() => setRandomize(v => !v)}><span className="knob" /> <em>{randomize ? "Randomized" : "Fixed"}</em></button>
+            </Field>
+            <Field label="Attach a proxy per country">
+              <button className={"ps-toggle" + (useProxy ? " on" : "")} onClick={() => setUseProxy(v => !v)}><span className="knob" /> <em>{useProxy ? "On" : "Off"}</em></button>
+            </Field>
+          </Row>
+
+          <div className="ps-hint"><Boxes size={12} /> Each profile gets its own coherent fingerprint, seed & session — {randomize ? "hardware varies per profile" : "hardware fixed per OS"}. Preview: <b style={{ color: T.text }}>{prefix}-{String(start).padStart(pad, "0")} … {prefix}-{String(start + n - 1).padStart(pad, "0")}</b> · {oses.join("/")} · {countries.join("/")}</div>
         </div>
         <div className="ps-drawer-foot">
-          <button className="ps-btn ghost" onClick={onClose}>Cancel</button>
-          <button className="ps-btn primary" onClick={create}><Plus size={15} /> Create {n} profiles</button>
+          <button className="ps-btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="ps-btn primary" onClick={create} disabled={busy}>
+            {busy ? <><RefreshCw size={15} className="ps-spin" /> Creating {prog}/{n}…</> : <><Plus size={15} /> Create {n} profile{n > 1 ? "s" : ""}</>}
+          </button>
         </div>
       </div>
     </div>
@@ -1326,6 +1501,16 @@ select.ps-in { cursor: pointer; }
   font-family: inherit; transition: .12s; }
 .ps-chip:hover { border-color: #33334f; color: ${T.text}; }
 .ps-chip.on { background: ${T.violet}; border-color: ${T.violet}; color: #fff; }
+.ps-chiprow { display: flex; flex-wrap: wrap; gap: 7px; }
+.ps-chip-btn { display: inline-flex; align-items: center; gap: 5px; background: ${T.bg};
+  border: 1px solid ${T.line}; border-radius: 8px; padding: 6px 11px; font-size: 12px;
+  color: ${T.muted}; cursor: pointer; font-family: inherit; transition: .12s; }
+.ps-chip-btn:hover { border-color: #33334f; color: ${T.text}; }
+.ps-chip-btn.on { background: ${T.violetDim}; border-color: ${T.violet}; color: ${T.lilac}; }
+.ps-pager { display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 16px 0 4px; flex-wrap: wrap; }
+.ps-pager-info { font-size: 12px; color: ${T.muted}; margin: 0 6px; }
+.ps-pager-info b { color: ${T.text}; font-weight: 600; }
 @keyframes ps-pop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 .ps-cookie-actions .ps-btn.disabled { opacity: .5; cursor: progress; }
 .ps-hint code { font-family: ${FONT.mono}; font-size: 11px; color: ${T.text}; }

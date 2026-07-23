@@ -5,6 +5,30 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Auto-adjust — align a profile to reality** (`persona align`, `probe.py`):
+  a one-click fix for a low trust grade. It opens the profile, reads back what
+  the browser *actually* presents (platform, CPU, memory, GPU, screen, fonts,
+  media, languages) and rewrites the fingerprint to match — regenerating the OS
+  identity when the engine turns out to render a different OS than the profile
+  claimed (e.g. CloakBrowser showing the host's real hardware). Afterwards the
+  browser and the profile tell one story, so a detector sees no contradiction;
+  the trust score jumps to A. Exposed as `POST /api/profiles/{id}/align` and an
+  **Auto-adjust** button next to the trust check, which pulls the rewritten
+  values straight back into the editor and shows the before→after grade.
+- **Bulk create at scale** (`persona bulk-create`, `bulk.generate_profiles`,
+  `POST /api/profiles/batch`): generate thousands of coherent profiles at once —
+  up to 10,000 from the dashboard — spread across operating systems, countries/
+  locales and Chrome versions, each with its own seed so no two share a
+  fingerprint. The dashboard's bulk dialog gained OS/country/browser multi-pick,
+  an engine choice, a randomize-hardware toggle and a per-country proxy switch,
+  and posts in chunks; the profile grid is now **paginated** so a 10k list stays
+  responsive.
+- **Real GPUs and displays count as coherent.** `validate()` (and the dashboard
+  meter) now accept any WebGL renderer whose graphics API fits the OS (Windows →
+  Direct3D, macOS/Linux → desktop OpenGL) and any real-world screen size, not
+  just the short curated lists — so a machine-aligned profile carrying its
+  actual GPU/resolution isn't wrongly flagged. `navigator.languages` is matched
+  on its primary language rather than an exact list.
 - **Import from other anti-detect browsers** (`persona import-from`,
   `importers.py`): migrate profiles exported from GoLogin, AdsPower or
   Multilogin. Tolerant field mapping (each value looked up under its known

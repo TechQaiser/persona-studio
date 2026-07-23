@@ -14,10 +14,11 @@ didn't mention.
 
 from __future__ import annotations
 
+import random
 from typing import Optional
 
 from . import devices
-from .fingerprint import generate
+from .fingerprint import build_user_agent, generate
 from .models import Profile, Proxy
 
 # Everything a bulk edit is allowed to touch. Deliberately excludes id, name and
@@ -88,6 +89,52 @@ def apply_patch(profile: Profile, patch: dict) -> list[str]:
         changed.append("fingerprint")
 
     return changed
+
+
+def generate_profiles(
+    count: int,
+    *,
+    oses: Optional[list[str]] = None,
+    locales: Optional[list[str]] = None,
+    chrome_versions: Optional[list[str]] = None,
+    engine: str = "playwright",
+    name_prefix: str = "Profile",
+    start_index: int = 1,
+    pad: int = 4,
+    tags: Optional[list[str]] = None,
+    mobile: bool = False,
+    seed: Optional[int] = None,
+) -> list[Profile]:
+    """Generate ``count`` coherent profiles, spread across the chosen options.
+
+    Each profile gets its own random seed, so its hardware picks and canvas/audio
+    noise are distinct — a thousand profiles look like a thousand devices, not
+    one cloned a thousand times. ``oses`` and ``locales`` are cycled through so
+    the batch is evenly distributed rather than clumped. This is the engine-side
+    counterpart to the dashboard's bulk-create; both produce coherent identities.
+    """
+    if count < 1:
+        return []
+    oses = [o.lower() for o in (oses or ["windows"])]
+    rng = random.Random(seed)
+    out: list[Profile] = []
+
+    for i in range(count):
+        os_key = oses[i % len(oses)]
+        # Advance the locale on a different stride than the OS, so picking two
+        # OSes and two locales yields all four pairings rather than locking
+        # Windows to the first locale and macOS to the second.
+        locale = locales[(i // len(oses)) % len(locales)] if locales else None
+        fp = generate(seed=rng.randint(1, 2**31 - 1), os=os_key, locale=locale,
+                      mobile=(mobile or os_key == "android"))
+        # Restrict browser versions to the caller's subset if one was given.
+        if chrome_versions:
+            fp.chrome_version = rng.choice(chrome_versions)
+            fp.user_agent = build_user_agent(fp.os, fp.chrome_version)
+        name = f"{name_prefix}-{str(start_index + i).zfill(pad)}"
+        out.append(Profile(name=name, fingerprint=fp, engine=engine,
+                           tags=list(tags or [])))
+    return out
 
 
 def select(profiles: list[Profile], refs: Optional[list[str]] = None,

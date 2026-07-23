@@ -48,6 +48,10 @@ export const api = {
   proxyTest: (id) => req("POST", `/api/profiles/${id}/proxy-test`),
   trust: (id) => req("POST", `/api/profiles/${id}/trust`),
   tls: (id) => req("POST", `/api/profiles/${id}/tls`),
+  // Auto-adjust: align the profile to what its browser actually presents.
+  align: (id) => req("POST", `/api/profiles/${id}/align`),
   warmup: (id, minutes) => req("POST", `/api/profiles/${id}/warmup`, { minutes }),
   bulkUpdate: (ids, patch) => req("POST", "/api/profiles/bulk", { ids, patch }),
+  // Bulk create at scale: save a chunk of generated profiles in one request.
+  batchCreate: (profiles) => req("POST", "/api/profiles/batch", { profiles }),
 };

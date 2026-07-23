@@ -94,18 +94,30 @@ class DashboardStore:
         return True
 
 
-def _engine_webgl(os_key: str, dash_renderer: str) -> tuple[str, str]:
-    """Map a dashboard GPU label to a real engine WebGL vendor/renderer pair."""
-    pool = devices.WEBGL.get(os_key) or devices.WEBGL["windows"]
-    if dash_renderer:
-        # match on a distinctive token like "RTX 3060", "M1", "Adreno"
-        for token in dash_renderer.replace("(", " ").replace(")", " ").split():
-            if len(token) < 3:
-                continue
-            for vendor, renderer in pool:
-                if token in renderer:
-                    return vendor, renderer
-    return pool[0]
+def _vendor_for(renderer: str) -> str:
+    """Guess a WebGL vendor string from a renderer string's GPU family."""
+    r = (renderer or "").lower()
+    for token, name in (("nvidia", "NVIDIA"), ("radeon", "AMD"), ("amd", "AMD"),
+                        ("intel", "Intel"), ("apple", "Apple"),
+                        ("adreno", "Qualcomm"), ("qualcomm", "Qualcomm"),
+                        ("mali", "ARM"), ("arm", "ARM")):
+        if token in r:
+            return f"Google Inc. ({name})"
+    return "Google Inc."
+
+
+def _engine_webgl(os_key: str, dash_renderer: str, dash_vendor: str = "") -> tuple[str, str]:
+    """Resolve a dashboard profile's GPU into an engine WebGL vendor/renderer.
+
+    The dashboard string is passed through as-is (not remapped to the curated
+    pool), so a real GPU written by `persona align` survives the round-trip and
+    the profile keeps matching its browser. Only a blank renderer falls back to
+    a curated default."""
+    renderer = (dash_renderer or "").strip()
+    vendor = (dash_vendor or "").strip()
+    if not renderer:
+        return (devices.WEBGL.get(os_key) or devices.WEBGL["windows"])[0]
+    return (vendor or _vendor_for(renderer)), renderer
 
 
 def _parse_lines(raw) -> list[str]:
@@ -145,7 +157,7 @@ def to_engine_profile(d: dict) -> Profile:
 
     locale = d.get("locale", "en-US")
     tz, langs = devices.LOCALES.get(locale, devices.LOCALES["en-US"])
-    vendor, renderer = _engine_webgl(os_key, d.get("webglRenderer", ""))
+    vendor, renderer = _engine_webgl(os_key, d.get("webglRenderer", ""), d.get("webglVendor", ""))
 
     fp = Fingerprint(
         os=os_key,
@@ -433,6 +445,45 @@ def create_app(data_dir: Optional[str] = None):
              "warmup", pid, "--minutes", str(minutes), "--headless"],
         )
         return decorate(d)
+
+    @app.post("/api/profiles/{pid}/align")
+    def align(pid: str):
+        """Auto-adjust: rewrite the profile to match what its browser presents,
+        then write the aligned values back so the dashboard profile stays put."""
+        d = _prepare(pid)
+        res = json.loads(_run_cli("align", pid, "--json"))
+        fp = res.get("fingerprint") or {}
+        if fp.get("os"):
+            d["os"] = OS_TO_DASH.get(fp["os"], d.get("os"))
+        for src, dst in (("userAgent", "userAgent"), ("browserVersion", "browserVersion"),
+                        ("cores", "cores"), ("memory", "memory"), ("screen", "screen"),
+                        ("webglVendor", "webglVendor"), ("webglRenderer", "webglRenderer"),
+                        ("cameras", "mediaVideo"), ("microphones", "mediaAudio"),
+                        ("locale", "locale"), ("timezone", "timezone")):
+            if fp.get(src) is not None:
+                d[dst] = fp[src]
+        res["profile"] = decorate(dash.save(d))
+        return res
+
+    @app.post("/api/profiles/batch")
+    def batch_create(body: dict):
+        """Save many dashboard profiles in one request (bulk create at scale).
+
+        The dashboard generates coherent profiles client-side and posts them in
+        chunks; this just persists them, assigning each a fresh unique id."""
+        incoming = body.get("profiles") or []
+        ids = []
+        last_engine = None
+        for p in incoming:
+            p.pop("_new", None)
+            p.pop("id", None)           # always mint a server-side id
+            if not p.get("engine"):
+                p["engine"] = engine_store.get_default_engine()
+            last_engine = p.get("engine")
+            ids.append(dash.save(p)["id"])
+        if last_engine:
+            engine_store.set_default_engine(last_engine)
+        return {"created": len(ids), "ids": ids}
 
     @app.post("/api/profiles/bulk")
     def bulk_update(body: dict):

@@ -2,8 +2,8 @@
 
 import pytest
 
-from persona import generate
-from persona.bulk import apply_patch, select
+from persona import generate, validate
+from persona.bulk import apply_patch, select, generate_profiles
 from persona.models import Profile, Proxy
 
 
@@ -105,3 +105,48 @@ def test_select_all(three):
 
 def test_select_nothing_by_default(three):
     assert select(three) == []
+
+
+# ---- bulk generation at scale --------------------------------------------
+def test_generate_profiles_count_and_names():
+    ps = generate_profiles(5, name_prefix="Batch", start_index=1, pad=3)
+    assert len(ps) == 5
+    assert [p.name for p in ps] == ["Batch-001", "Batch-002", "Batch-003",
+                                    "Batch-004", "Batch-005"]
+
+
+def test_generate_profiles_are_all_coherent():
+    for p in generate_profiles(50, oses=["windows", "macos", "linux"],
+                               locales=["en-US", "de-DE"]):
+        assert validate(p.fingerprint) == [], p.name
+
+
+def test_generate_profiles_spread_across_oses():
+    ps = generate_profiles(6, oses=["windows", "macos"])
+    kinds = {p.fingerprint.os for p in ps}
+    assert kinds == {"windows", "macos"}          # both represented
+    assert sum(p.fingerprint.os == "windows" for p in ps) == 3   # evenly
+
+
+def test_generate_profiles_are_distinct_identities():
+    ps = generate_profiles(20, oses=["windows"])
+    seeds = {p.fingerprint.seed for p in ps}
+    assert len(seeds) == 20                         # no cloned fingerprints
+
+
+def test_generate_profiles_restricts_chrome_versions():
+    ps = generate_profiles(10, chrome_versions=["128.0.0.0"])
+    for p in ps:
+        assert p.fingerprint.chrome_version == "128.0.0.0"
+        assert "Chrome/128.0.0.0" in p.fingerprint.user_agent
+
+
+def test_generate_profiles_reproducible_with_seed():
+    a = generate_profiles(4, oses=["windows", "macos"], seed=99)
+    b = generate_profiles(4, oses=["windows", "macos"], seed=99)
+    assert [p.fingerprint.to_dict() for p in a] == [p.fingerprint.to_dict() for p in b]
+
+
+def test_generate_profiles_tags_and_engine():
+    ps = generate_profiles(3, engine="cloak", tags=["bulk", "q3"])
+    assert all(p.engine == "cloak" and p.tags == ["bulk", "q3"] for p in ps)

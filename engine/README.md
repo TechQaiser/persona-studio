@@ -24,6 +24,8 @@ pip install -e ".[api]"
 ```bash
 persona create acct-01 --os windows --locale en-US --tag client-x
 persona create acct-02 --mobile --proxy "http://user:pass@host:8080" --country PK
+persona bulk-create --count 500 --os windows --os macos \
+        --locale en-US --locale de-DE --prefix Batch --tag bulk   # many at once
 persona list
 persona show acct-01
 persona check acct-01          # validate fingerprint coherence
@@ -55,9 +57,21 @@ import isn't wired yet.)
 
 ```bash
 persona trust acct-01            # score it the way a fingerprinting script would
+persona align acct-01            # auto-adjust: match the profile to what the browser shows
 persona proxy test acct-01       # exit IP, country, timezone match + WebRTC leaks
 persona tls acct-01              # the TLS/JA3 handshake — the one layer JS can't touch
 ```
+
+`align` is the fix for a low trust score. The checker fails whenever the
+*declared* identity and the *presented* one disagree — which is unavoidable with
+an engine that renders the host's real hardware (CloakBrowser patches at the C++
+level, so it shows this machine's GPU/CPU, not Persona's). `align` opens the
+profile, reads back platform, CPU, memory, GPU, screen, fonts, media and
+languages, and rewrites the fingerprint to those values — regenerating the OS
+identity (user-agent, platform) if the machine is a different OS than the profile
+claimed. Afterwards nothing contradicts and the grade jumps to A. (On the
+`playwright`/`patchright` engines the injected script already spoofs the hardware
+to the declared identity, so there's usually nothing to align.)
 
 `tls` reads the profile's own TLS/HTTP2 handshake back from an echo service and
 reports its **JA3** and **JA4** fingerprints. This is the layer the whole
@@ -174,9 +188,11 @@ dashboard uses to manage and launch profiles for real. It listens on
 | POST | `/api/profiles/{id}/cookies` | Import cookies (`text` or `cookies`, plus `clear`) |
 | POST | `/api/profiles/{id}/proxy-test` | Exit IP, country and WebRTC leak check |
 | POST | `/api/profiles/{id}/trust` | Trust score + the individual checks |
+| POST | `/api/profiles/{id}/align` | Auto-adjust to what the browser presents; before→after |
 | POST | `/api/profiles/{id}/tls` | TLS/JA3/JA4 handshake fingerprint |
 | POST | `/api/profiles/{id}/warmup` | Start a background warm-up (`minutes`) |
 | POST | `/api/profiles/bulk` | Apply one `patch` to many `ids` |
+| POST | `/api/profiles/batch` | Save many generated `profiles` at once (bulk create) |
 | POST | `/api/fingerprint/validate` | Coherence check a fingerprint |
 
 ## Python API
@@ -204,8 +220,8 @@ store.save(profile)
 | `cookies.py` | Cookie import/export across the formats people actually have |
 | `crypto.py` | Encrypt-at-rest for secrets (optional `cryptography` backend) |
 | `importers.py` | Tolerant import from GoLogin / AdsPower / Multilogin exports |
-| `probe.py` | Proxy/leak/TLS test and the trust report a fingerprinter would produce |
-| `bulk.py` | Multi-profile synchroniser: one patch, applied to many |
+| `probe.py` | Proxy/leak/TLS test, the trust report, and the auto-aligner (`align`) |
+| `bulk.py` | Multi-profile synchroniser + bulk generator (`generate_profiles`) |
 | `warmup.py` | Human-paced browsing that gives a fresh profile a past |
 | `automation.py` | CDP attach so Selenium/Puppeteer/Playwright can drive a profile |
 | `stealth.py` | Generates the page-level JS patch for a fingerprint |

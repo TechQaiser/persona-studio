@@ -60,6 +60,7 @@ persona-studio/
 | 💾 **Persistent sessions** | Cookies & localStorage survive between launches |
 | 🍪 **Cookie import/export** | Move a logged-in session in or out — Cookie-Editor JSON, Playwright state, or `cookies.txt` |
 | 🔎 **Trust checker** | Grades the *real* browser against the checks a fingerprinter runs |
+| ✨ **Auto-adjust** | One click aligns a profile to what its browser actually presents — grade jumps to A |
 | 📡 **Proxy & leak test** | Exit IP, country and timezone match + WebRTC leak detection |
 | 🔐 **TLS/JA3 check** | Reads the handshake fingerprint — the one layer JS injection can't reach |
 | 🔑 **Encrypted vault** | Proxy passwords encrypted at rest behind a master password |
@@ -68,7 +69,7 @@ persona-studio/
 | 🤖 **Automation attach** | Drive a live profile from Selenium, Puppeteer or Playwright over CDP |
 | 🔁 **Bulk edit** | One change applied to hundreds of profiles, coherently |
 | 📥 **Migrate in** | Import profiles from GoLogin, AdsPower or Multilogin exports |
-| 📦 **Bulk create** | Spin up dozens of coherent profiles at once |
+| 📦 **Bulk create at scale** | Generate thousands of coherent profiles — mixed OS, country, browser, per-profile hardware |
 | 🗂️ **Folders, tags, search** | Organize hundreds of accounts |
 | 🖥️ **Real browser** | Launches a real browser, per-profile isolation |
 | 🔌 **Pluggable engines** | Swap the stealth backend: CloakBrowser, Camoufox, Patchright, Playwright |
@@ -230,6 +231,11 @@ stays the same manager over all of them.
 - [x] Geolocation aligned to the proxy country + WebRTC IP-handling enforced at launch
 
 - [x] Import from GoLogin / AdsPower / Multilogin (`persona import-from`)
+
+- [x] Auto-adjust (`persona align`) — align a profile to what its browser really
+      shows so a low trust grade jumps to A
+- [x] Bulk create at scale (`persona bulk-create`, dashboard) — thousands of
+      coherent profiles across OS / country / browser, with a paginated grid
 
 **Next**
 

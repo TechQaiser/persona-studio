@@ -142,6 +142,40 @@ def sec_ch_ua(fp: Fingerprint) -> str:
     )
 
 
+def build_user_agent(os_key: str, chrome: str) -> str:
+    """Public wrapper so callers (e.g. the aligner) can rebuild a UA for an OS."""
+    return _build_user_agent(os_key, chrome)
+
+
+def webgl_plausible(os_key: str, vendor: str, renderer: str) -> bool:
+    """Is this WebGL vendor/renderer believable for ``os_key``?
+
+    The curated pool in :mod:`devices` can't list every real GPU — there are
+    thousands. So on top of "is it one we generate?", we accept any renderer
+    whose API shape matches the OS: Windows drives WebGL through Direct3D
+    (ANGLE/D3D11), while macOS and Linux go through desktop OpenGL. This lets a
+    profile carry the machine's *actual* GPU (e.g. after `persona align`)
+    without being flagged as incoherent, while still catching an Apple GPU
+    pretending to be on Windows.
+    """
+    if (vendor, renderer) in devices.WEBGL.get(os_key, []):
+        return True
+    r = (renderer or "").lower()
+    if not r:
+        return False
+    is_d3d = "direct3d" in r or "d3d11" in r or "d3d9" in r
+    is_gl = "opengl" in r
+    if os_key == "windows":
+        return is_d3d
+    if os_key == "macos":
+        return is_gl and not is_d3d and ("apple" in r or "intel" in r or "amd" in r or "metal" in r or "opengl 4" in r)
+    if os_key == "linux":
+        return is_gl and not is_d3d
+    if os_key == "android":
+        return "opengl es" in r or "adreno" in r or "mali" in r
+    return False
+
+
 def validate(fp: Fingerprint) -> list[str]:
     """Return a list of consistency problems (empty list == coherent).
 
@@ -152,10 +186,14 @@ def validate(fp: Fingerprint) -> list[str]:
     if fp.platform != devices.NAV_PLATFORM.get(fp.os):
         issues.append(f"platform '{fp.platform}' does not match os '{fp.os}'")
 
-    if (fp.webgl_vendor, fp.webgl_renderer) not in devices.WEBGL.get(fp.os, []):
+    if not webgl_plausible(fp.os, fp.webgl_vendor, fp.webgl_renderer):
         issues.append("webgl vendor/renderer not valid for this os")
 
-    if (fp.screen_width, fp.screen_height) not in devices.SCREENS.get(fp.os, []):
+    # Accept the curated resolutions, but also any real-world one: after aligning
+    # to a machine, a profile carries that display's actual size, which won't be
+    # in the short curated list yet is perfectly coherent.
+    sane = 320 <= fp.screen_width <= 8000 and 480 <= fp.screen_height <= 5000
+    if (fp.screen_width, fp.screen_height) not in devices.SCREENS.get(fp.os, []) and not sane:
         issues.append("screen resolution not typical for this os")
 
     if fp.viewport_width > fp.screen_width or fp.viewport_height > fp.screen_height:
@@ -165,7 +203,11 @@ def validate(fp: Fingerprint) -> list[str]:
         tz, langs = devices.LOCALES[fp.locale]
         if fp.timezone != tz:
             issues.append("timezone does not match locale")
-        if fp.languages != langs:
+        # navigator.languages varies with the user's settings (one entry or
+        # several), so we require the *primary* language to agree with the
+        # locale rather than an exact list — a machine-aligned profile that
+        # reports just ["en-US"] is as coherent as ["en-US", "en"].
+        if not fp.languages or fp.languages[0] != langs[0]:
             issues.append("languages do not match locale")
     else:
         issues.append(f"unknown locale '{fp.locale}'")

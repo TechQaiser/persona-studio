@@ -343,6 +343,64 @@ def cmd_trust(args, store: ProfileStore) -> int:
     return 0 if rep["score"] == 100 else 1
 
 
+def cmd_align(args, store: ProfileStore) -> int:
+    prof = _resolve_or_fail(args, store)
+    if not prof:
+        return 1
+    from .probe import align_to_reality
+    if not args.json:
+        print(_c(f"Aligning '{prof.name}' to what its browser actually presents...", C.CYN))
+    res = align_to_reality(prof, store, engine=args.engine)
+    if args.json:
+        print(json.dumps(res))
+        return 0
+    b, a = res["before"], res["after"]
+    colour = C.GRN if a["score"] >= 95 else C.YEL if a["score"] >= 70 else C.RED
+    print(_c(f"\n  grade {b['grade']} ({b['score']}%)  ->  grade {a['grade']} ({a['score']}%)"
+             f"   {a['passed']}/{a['total']} checks\n", colour))
+    if res["changed"]:
+        print(_c("  Adjusted: ", C.B) + _c(", ".join(res["changed"]), C.DIM))
+        print(_c(f"  Identity now reads as: {res['os']}", C.DIM))
+    else:
+        print(_c("  Nothing to change — the profile already matches its browser.", C.DIM))
+    print()
+    _print_checks(res["checks"])
+    return 0 if a["score"] == 100 else 1
+
+
+def cmd_bulk_create(args, store: ProfileStore) -> int:
+    from .bulk import generate_profiles
+    engine = args.engine or store.get_default_engine()
+    profiles = generate_profiles(
+        args.count,
+        oses=args.os or None,
+        locales=args.locale or None,
+        chrome_versions=args.chrome or None,
+        engine=engine,
+        name_prefix=args.prefix,
+        start_index=args.start,
+        pad=args.pad,
+        tags=args.tag or None,
+        mobile=args.mobile,
+        seed=args.seed,
+    )
+    existing = {p.name for p in store.list()}
+    saved = skipped = 0
+    for prof in profiles:
+        if prof.name in existing:
+            skipped += 1
+            continue
+        store.save(prof)
+        existing.add(prof.name)
+        saved += 1
+    if args.engine:
+        store.set_default_engine(args.engine)
+    note = _c(f", skipped {skipped} name clash(es)", C.YEL) if skipped else ""
+    print(_c(f"Created {saved} profile(s)", C.GRN) + note
+          + _c(f"  (engine {engine})", C.DIM))
+    return 0
+
+
 def cmd_warmup(args, store: ProfileStore) -> int:
     prof = _resolve_or_fail(args, store)
     if not prof:
@@ -695,6 +753,30 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--engine", help="Inspect with a different engine than the profile's")
     c.add_argument("--json", action="store_true", help="Print the raw result as JSON")
     c.set_defaults(func=cmd_trust)
+
+    c = sub.add_parser("align",
+                       help="Auto-adjust: match the profile to what its browser really shows")
+    c.add_argument("ref")
+    c.add_argument("--engine", help="Align against a different engine than the profile's")
+    c.add_argument("--json", action="store_true", help="Print the raw result as JSON")
+    c.set_defaults(func=cmd_align)
+
+    c = sub.add_parser("bulk-create", help="Generate many coherent profiles at once")
+    c.add_argument("--count", type=int, required=True, help="How many to create")
+    c.add_argument("--os", action="append", choices=["windows", "macos", "linux", "android"],
+                   help="OS to spread the batch across (repeatable; default windows)")
+    c.add_argument("--locale", action="append",
+                   help="Locale to spread across (repeatable; e.g. --locale en-US --locale de-DE)")
+    c.add_argument("--chrome", action="append",
+                   help="Chrome version to draw from (repeatable; e.g. 128.0.0.0)")
+    c.add_argument("--engine", help="Launch backend for the batch")
+    c.add_argument("--prefix", default="Profile", help="Name prefix (default: Profile)")
+    c.add_argument("--start", type=int, default=1, help="First number in the sequence")
+    c.add_argument("--pad", type=int, default=4, help="Zero-pad the number to this width")
+    c.add_argument("--tag", action="append", help="Tag every profile (repeatable)")
+    c.add_argument("--mobile", action="store_true", help="Generate mobile devices")
+    c.add_argument("--seed", type=int, help="Fixed seed for a reproducible batch")
+    c.set_defaults(func=cmd_bulk_create)
 
     c = sub.add_parser("warmup", help="Browse normally for a while to age the profile")
     c.add_argument("ref")
