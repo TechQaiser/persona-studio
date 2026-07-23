@@ -67,6 +67,7 @@ persona-studio/
 | ✨ **Warm-up** | Human-paced browsing so a fresh profile isn't obviously fresh |
 | 🤖 **Automation attach** | Drive a live profile from Selenium, Puppeteer or Playwright over CDP |
 | 🔁 **Bulk edit** | One change applied to hundreds of profiles, coherently |
+| 📥 **Migrate in** | Import profiles from GoLogin, AdsPower or Multilogin exports |
 | 📦 **Bulk create** | Spin up dozens of coherent profiles at once |
 | 🗂️ **Folders, tags, search** | Organize hundreds of accounts |
 | 🖥️ **Real browser** | Launches a real browser, per-profile isolation |
@@ -228,10 +229,14 @@ stays the same manager over all of them.
 - [x] Encrypted secrets at rest (`persona vault`) — proxy passwords, master-password
 - [x] Geolocation aligned to the proxy country + WebRTC IP-handling enforced at launch
 
+- [x] Import from GoLogin / AdsPower / Multilogin (`persona import-from`)
+
 **Next**
 
 - [ ] DNS leak checker (needs a resolver-side probe, not just the browser)
+- [ ] Dashboard-side import (the CLI importer lands in the engine store today)
 - [ ] Cookie warm-up presets per vertical (ads, e-commerce, crypto)
+- [ ] Scheduled warm-up (recurring, unattended)
 - [ ] Cloud sync + team roles — deliberately unbuilt: it needs a hosted backend,
       accounts and a threat model of its own. Persona stays local-first until
       that's designed properly rather than bolted on.

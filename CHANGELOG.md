@@ -5,6 +5,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Import from other anti-detect browsers** (`persona import-from`,
+  `importers.py`): migrate profiles exported from GoLogin, AdsPower or
+  Multilogin. Tolerant field mapping (each value looked up under its known
+  aliases), gaps filled from a coherent generated base, and every imported
+  profile run through `validate()` so mismatches are flagged for review rather
+  than shipped silently.
 - **Encrypt-at-rest for secrets** (`persona vault`, `crypto.py`): a master
   password encrypts proxy passwords in the store (Fernet/AES, key via
   PBKDF2-HMAC-SHA256), leaving the rest of each profile readable. Supply the

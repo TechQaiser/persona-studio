@@ -32,8 +32,24 @@ persona default-engine cloak   # set the engine new profiles use (CloakBrowser)
 persona launch acct-01
 persona export acct-01 acct-01.json
 persona import acct-01.json
+persona import-from gologin-export.json   # migrate from another anti-detect tool
 persona serve                  # run the HTTP API the dashboard talks to
 ```
+
+### Migrating from GoLogin / AdsPower / Multilogin
+
+```bash
+persona import-from their-export.json
+```
+
+Point it at a profile export (a single object or a list) from GoLogin, AdsPower
+or Multilogin. The mapping is tolerant — those tools rename fields between
+releases, so Persona looks for each value under any of the names it's known by,
+fills gaps from a coherent generated base, and runs `validate()` on the result.
+Anything that didn't line up is flagged for review; run `persona check <name>`
+to see the details. Treat an import as a reviewed starting point, not a
+guaranteed one-to-one copy. (Lands in the engine store / CLI; dashboard-side
+import isn't wired yet.)
 
 ### Inspecting a profile
 
@@ -187,6 +203,7 @@ store.save(profile)
 | `store.py` | JSON-per-profile persistence + user-data dirs |
 | `cookies.py` | Cookie import/export across the formats people actually have |
 | `crypto.py` | Encrypt-at-rest for secrets (optional `cryptography` backend) |
+| `importers.py` | Tolerant import from GoLogin / AdsPower / Multilogin exports |
 | `probe.py` | Proxy/leak/TLS test and the trust report a fingerprinter would produce |
 | `bulk.py` | Multi-profile synchroniser: one patch, applied to many |
 | `warmup.py` | Human-paced browsing that gives a fresh profile a past |

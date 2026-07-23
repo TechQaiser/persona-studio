@@ -21,6 +21,7 @@ Command-line interface for Persona.
     persona apply [refs] [--tag|--all] --engine …  (one change, many profiles)
     persona engines                               (list launch engines + install status)
     persona default-engine [name]                 (show/set the engine new profiles use)
+    persona import-from <file>                    (import from GoLogin/AdsPower/Multilogin)
     persona vault enable|status                   (encrypt proxy passwords at rest)
     persona serve [--host] [--port]               (run the HTTP API for the dashboard)
 """
@@ -501,6 +502,26 @@ def cmd_vault(args, store: ProfileStore) -> int:
     return 1
 
 
+def cmd_import_from(args, store: ProfileStore) -> int:
+    from . import importers
+    try:
+        results = importers.import_file(args.file, store)
+    except (FileNotFoundError, ValueError) as e:
+        print(_c(f"Couldn't read {args.file}: {e}", C.RED))
+        return 1
+    if not results:
+        print(_c("No profiles found in that file.", C.RED))
+        return 1
+    clean = sum(1 for _, issues in results if not issues)
+    print(_c(f"Imported {len(results)} profile(s)  ", C.GRN)
+          + _c(f"({clean} coherent out of the box)", C.DIM))
+    for prof, issues in results:
+        if issues:
+            print(f"  {prof.name:<24}{_c('review: ' + '; '.join(issues), C.YEL)}")
+    print(_c("Run `persona check <name>` on any flagged profile to see details.", C.DIM))
+    return 0
+
+
 def cmd_serve(args, store: ProfileStore) -> int:
     from .server import serve
     serve(host=args.host, port=args.port, data_dir=args.data_dir)
@@ -623,6 +644,11 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("import", help="Import a profile from JSON")
     c.add_argument("file")
     c.set_defaults(func=cmd_import)
+
+    c = sub.add_parser("import-from",
+                       help="Import profiles exported from GoLogin / AdsPower / Multilogin")
+    c.add_argument("file", help="Their exported JSON (a single profile or a list)")
+    c.set_defaults(func=cmd_import_from)
 
     c = sub.add_parser("cookies", help="List, export or import a profile's cookies")
     ck = c.add_subparsers(dest="cookies_command", required=True)
