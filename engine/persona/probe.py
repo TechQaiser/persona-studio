@@ -388,9 +388,30 @@ async (probe) => {
     out.canvasEmpty = c.toDataURL().length < 100;
   } catch (e) { out.canvasStable = false; }
 
+  // Font presence by width measurement — the technique real fingerprinters
+  // use. document.fonts.check() is unreliable here: a real Chromium (e.g.
+  // CloakBrowser, which doesn't run our patch) answers "yes" for *any* family
+  // because it always has a fallback, so it can't tell a real font from a
+  // made-up one. Rendering a string in the candidate font vs. a base fallback
+  // and comparing widths does tell them apart.
   try {
-    out.fontKnown = document.fonts.check(`12px "${probe.knownFont}"`);
-    out.fontAlien = document.fonts.check(`12px "${probe.alienFont}"`);
+    const host = document.body || document.documentElement;
+    const span = document.createElement('span');
+    span.style.cssText = 'position:absolute;left:-9999px;top:-9999px;font-size:72px;white-space:nowrap;';
+    span.textContent = 'mmmmmmmmmmlli WwMiI0129@';
+    host.appendChild(span);
+    const bases = {};
+    for (const g of ['monospace', 'serif', 'sans-serif']) { span.style.fontFamily = g; bases[g] = span.offsetWidth; }
+    const installed = (fam) => {
+      for (const g of ['monospace', 'serif', 'sans-serif']) {
+        span.style.fontFamily = '"' + fam + '",' + g;
+        if (span.offsetWidth !== bases[g]) return true;
+      }
+      return false;
+    };
+    out.fontKnown = installed(probe.knownFont);
+    out.fontAlien = installed(probe.alienFont);
+    host.removeChild(span);
   } catch (e) { out.fontKnown = out.fontAlien = null; }
 
   try {
@@ -415,7 +436,20 @@ _FONT_PROBE_JS = """
 (fonts) => {
   const out = [];
   try {
-    for (const f of fonts) { if (document.fonts.check(`12px "${f}"`)) out.push(f); }
+    const host = document.body || document.documentElement;
+    const span = document.createElement('span');
+    span.style.cssText = 'position:absolute;left:-9999px;top:-9999px;font-size:72px;white-space:nowrap;';
+    span.textContent = 'mmmmmmmmmmlli WwMiI0129@';
+    host.appendChild(span);
+    const bases = {};
+    for (const g of ['monospace', 'serif', 'sans-serif']) { span.style.fontFamily = g; bases[g] = span.offsetWidth; }
+    for (const f of fonts) {
+      for (const g of ['monospace', 'serif', 'sans-serif']) {
+        span.style.fontFamily = '"' + f + '",' + g;
+        if (span.offsetWidth !== bases[g]) { out.push(f); break; }
+      }
+    }
+    host.removeChild(span);
   } catch (e) {}
   return out;
 }
