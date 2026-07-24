@@ -33,6 +33,16 @@ const FONT = {
   mono: '"JetBrains Mono", ui-monospace, Menlo, monospace',
 };
 
+/* ---- warm-up verticals (mirrors persona/warmup.py PRESETS) ------- */
+const WARMUP_PRESETS = [
+  { key: "general", label: "General" },
+  { key: "ads", label: "Ads / media" },
+  { key: "ecommerce", label: "E-commerce" },
+  { key: "crypto", label: "Crypto" },
+  { key: "social", label: "Social" },
+  { key: "news", label: "News" },
+];
+
 /* ---- device data (mirrors persona/devices.py) -------------------- */
 const OS_LIST = ["Windows", "macOS", "Linux", "Android"];
 const GPUS = {
@@ -324,6 +334,7 @@ export default function App() {
           <nav className="ps-nav">
             {[
               ["profiles", Layers, "Profiles"],
+              ["health", Activity, "Health"],
               ["engines", Blocks, "Engines"],
               ["proxies", Globe, "Proxies"],
               ["folders", FolderTree, "Folders"],
@@ -374,9 +385,10 @@ export default function App() {
           {view === "profiles" && (
             <ProfilesView {...{ filtered, query, setQuery, folder, sel, setSel, toggleSel, allSel, toggleRun, clone, remove, setEditor, setProfiles, setSync, filters, setFilters, live, refresh }} />
           )}
+          {view === "health" && <HealthView profiles={profiles} live={live} refresh={refresh} setEditor={setEditor} />}
           {view === "engines" && <EnginesView engines={engines} live={live} />}
           {view === "proxies" && <ProxiesView profiles={profiles} live={live} refresh={refresh} />}
-          {!["profiles", "engines", "proxies"].includes(view) && <Placeholder view={view} />}
+          {!["profiles", "health", "engines", "proxies"].includes(view) && <Placeholder view={view} />}
         </main>
       </div>
 
@@ -747,6 +759,14 @@ function ProbePanel({ probe, kind }) {
           {d.ja4 && <div className="ps-mono" style={{ fontSize: 11 }}>JA4 {d.ja4}</div>}
         </div>
       )}
+      {kind === "dns" && d.countries && (
+        <div className="ps-probe-head">
+          <span className="ps-probe-score" style={{ color: T.lilac, fontSize: 14 }}>
+            {d.resolvers?.length || 0} resolver{(d.resolvers?.length || 0) === 1 ? "" : "s"}
+          </span>
+          <span>{d.countries.join(", ") || "unknown"}</span>
+        </div>
+      )}
       {d.error && <div className="ps-check">{d.error}</div>}
       {checks.map((c, i) => (
         <div key={i} className={"ps-check" + (c.ok ? " ok" : "")}>
@@ -810,6 +830,37 @@ function Editor({ profile, live, onClose, onSave }) {
       if (res.profile) setP(x => ({ ...x, ...res.profile }));
       setProbe({ kind: "align", state: "done", data: res });
     } catch (e) { setProbe({ kind: "align", state: "error", data: e.message }); }
+  };
+
+  // Warm-up: pick a per-vertical site set, run it now, or schedule it to
+  // recur unattended. The schedule for this profile (if any) is loaded live.
+  const [preset, setPreset] = useState("general");
+  const [sched, setSched] = useState(null);
+  const [schedBusy, setSchedBusy] = useState(false);
+  useEffect(() => {
+    if (!cookiesReady) return;
+    api.listSchedules().then(list => setSched(list.find(s => s.profileId === p.id) || null)).catch(() => {});
+  }, [cookiesReady, p.id]);
+
+  const warmNow = () =>
+    api.warmup(p.id, 5, preset)
+      .then(() => setCkMsg(`Warm-up started (${preset}) — runs in the background for ~5 minutes.`))
+      .catch(e => setCkMsg("Warm-up failed: " + e.message));
+
+  const toggleSchedule = async () => {
+    setSchedBusy(true);
+    try {
+      if (sched) { await api.deleteSchedule(sched.id); setSched(null); }
+      else { setSched(await api.addSchedule({ profileId: p.id, everyHours: 12, minutes: 5, preset })); }
+    } catch (e) { setCkMsg("Schedule failed: " + e.message); }
+    setSchedBusy(false);
+  };
+  const patchSchedule = async (patch) => {
+    if (!sched) return;
+    setSchedBusy(true);
+    try { setSched(await api.updateSchedule(sched.id, patch)); }
+    catch (e) { setCkMsg("Schedule failed: " + e.message); }
+    setSchedBusy(false);
   };
 
   const importCookies = async (file) => {
@@ -968,14 +1019,23 @@ function Editor({ profile, live, onClose, onSave }) {
                     <Field label="Username"><input className="ps-in mono" value={p.proxy.user} onChange={e => setProxy({ user: e.target.value })} /></Field>
                     <Field label="Password"><input className="ps-in mono" type="password" value={p.proxy.pass} onChange={e => setProxy({ pass: e.target.value })} /></Field>
                   </Row>
-                  <button className="ps-btn ghost sm" style={{ marginTop: 4 }}
-                    disabled={!cookiesReady || probe?.state === "running"}
-                    onClick={() => runProbe("proxy", () => api.proxyTest(p.id))}>
-                    <RefreshCw size={13} /> Test connection
-                  </button>
+                  <div className="ps-cookie-actions" style={{ marginTop: 4 }}>
+                    <button className="ps-btn ghost sm"
+                      disabled={!cookiesReady || probe?.state === "running"}
+                      onClick={() => runProbe("proxy", () => api.proxyTest(p.id))}>
+                      <RefreshCw size={13} /> Test connection
+                    </button>
+                    <button className="ps-btn ghost sm"
+                      disabled={!cookiesReady || probe?.state === "running"}
+                      onClick={() => runProbe("dns", () => api.dns(p.id))}
+                      title="Do the profile's DNS lookups exit through the proxy, or leak to your real ISP?">
+                      <Globe size={13} /> DNS leak test
+                    </button>
+                  </div>
                   <ProbePanel probe={probe} kind="proxy" />
+                  <ProbePanel probe={probe} kind="dns" />
                   <div className="ps-hint"><MapPin size={12} /> {cookiesReady
-                    ? "Routes a real request through this profile and reports the exit IP, country and whether WebRTC leaks your own address."
+                    ? "Test connection routes a real request and reports the exit IP, country and WebRTC leaks. DNS leak test checks whether name lookups escape the proxy to your real ISP's resolver."
                     : "Save the profile and start the engine to test the connection for real."}</div>
                 </>
               ) : <div className="ps-hint">No proxy — this profile connects directly. Turn it on to route through a residential or datacenter proxy.</div>}
@@ -997,14 +1057,39 @@ function Editor({ profile, live, onClose, onSave }) {
               <div className="ps-hint"><Blocks size={12} /> Point at the folder containing <code>manifest.json</code>. Only these extensions load, so nothing carries over between profiles.</div>
 
               <SectionLabel icon={<Sparkles size={13} />} text="Warm-up" />
-              <div className="ps-cookie-actions">
-                <button className="ps-btn ghost sm" disabled={!cookiesReady}
-                  onClick={() => api.warmup(p.id, 5).then(() => setCkMsg("Warm-up started — it runs in the background for 5 minutes."))
-                                    .catch(e => setCkMsg("Warm-up failed: " + e.message))}>
-                  <Sparkles size={13} /> Warm up for 5 minutes
+              <Row>
+                <Field label="Vertical (which sites to browse)">
+                  <select className="ps-in" value={preset} onChange={e => setPreset(e.target.value)}>
+                    {WARMUP_PRESETS.map(v => <option key={v.key} value={v.key}>{v.label}</option>)}
+                  </select>
+                </Field>
+                <Field label="Run now">
+                  <button className="ps-btn ghost sm" disabled={!cookiesReady} onClick={warmNow} style={{ width: "100%", justifyContent: "center" }}>
+                    <Sparkles size={13} /> Warm up 5 min
+                  </button>
+                </Field>
+              </Row>
+              <div className="ps-proxy-toggle" style={{ marginTop: 8 }}>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>Schedule recurring warm-up</span>
+                <button className={"ps-toggle" + (sched ? " on" : "")} disabled={!cookiesReady || schedBusy} onClick={toggleSchedule}>
+                  <span className="knob" /> <em>{sched ? "On" : "Off"}</em>
                 </button>
               </div>
-              <div className="ps-hint"><Sparkles size={12} /> A profile created minutes ago with no history is a signal in itself. Warm-up browses ordinary sites at human pace so the session arrives with a plausible past. It shows as running until it finishes.</div>
+              {sched && (
+                <Row>
+                  <Field label="Every (hours)">
+                    <input type="number" min="1" className="ps-in" value={sched.everyHours}
+                      disabled={schedBusy} onChange={e => patchSchedule({ everyHours: Number(e.target.value) })} />
+                  </Field>
+                  <Field label="Vertical">
+                    <select className="ps-in" value={sched.preset} disabled={schedBusy}
+                      onChange={e => patchSchedule({ preset: e.target.value })}>
+                      {WARMUP_PRESETS.map(v => <option key={v.key} value={v.key}>{v.label}</option>)}
+                    </select>
+                  </Field>
+                </Row>
+              )}
+              <div className="ps-hint"><Sparkles size={12} /> A profile created minutes ago with no history is a signal in itself. Warm-up browses that vertical's sites at human pace so the session arrives with a plausible past. Scheduling reruns it unattended (the engine must be running) so the session never goes cold. {cookiesReady ? "" : "Save the profile and start the engine to enable it."}</div>
 
               <SectionLabel icon={<Cookie size={13} />} text="Session cookies" />
               {cookiesReady ? (
@@ -1228,6 +1313,128 @@ function ProxyStatus({ p }) {
   if (s === "failed") return <span className="ps-pill warn" title={p.lastCheck?.error || ""}><ShieldAlert size={12} /> Failed</span>;
   if (s === "skipped") return <span className="ps-pill" title={p.lastCheck?.error || ""} style={{ background: T.violetDim, color: T.lilac }}><Circle size={10} /> SOCKS</span>;
   return <span className="ps-pill" style={{ color: T.dim }}><Circle size={10} /> Untested</span>;
+}
+
+/* ---- Health overview --------------------------------------------- */
+function GradeBadge({ grade }) {
+  if (!grade) return <span className="ps-mono dim">—</span>;
+  const c = grade === "A" ? T.mint : grade === "B" ? T.lilac : grade === "C" ? T.amber : T.red;
+  return <span className="ps-grade" style={{ color: c, borderColor: c + "55", background: c + "18" }}>{grade}</span>;
+}
+
+function HealthView({ profiles, live, refresh, setEditor }) {
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState({});           // id -> action label
+  const load = async () => { try { setData(await api.health()); } catch { /* offline */ } };
+  useEffect(() => { if (live) load(); }, [live]);
+
+  // Demo mode: no engine to grade against, so derive coherence/proxy from the
+  // sample profiles and be honest that trust and schedules need the engine.
+  if (!live) {
+    const rows = profiles.map(p => ({ ...p, coherent: coherence(p).length === 0, issues: coherence(p) }));
+    const coherent = rows.filter(r => r.coherent).length;
+    return (
+      <div className="ps-scroll">
+        <div className="ps-health-summary">
+          <HealthChip label="Profiles" value={rows.length} />
+          <HealthChip label="Coherent" value={`${coherent}/${rows.length}`} color={T.mint} />
+          <HealthChip label="With proxy" value={rows.filter(r => r.proxy).length} color={T.lilac} />
+        </div>
+        <div className="ps-hint"><Activity size={12} /> Start the engine (<code>persona serve</code>) for live trust grades, DNS/proxy status and warm-up schedules. Showing coherence derived from the sample profiles.</div>
+        <table className="ps-table" style={{ marginTop: 12 }}>
+          <thead><tr><th>Profile</th><th>Engine</th><th>OS</th><th>Coherence</th><th>Proxy</th></tr></thead>
+          <tbody>{rows.map((r, i) => (
+            <tr key={r.id || i}>
+              <td>{r.name}</td>
+              <td className="ps-mono dim">{r.engine || "—"}</td>
+              <td><span className="ps-os">{r.os}</span></td>
+              <td>{r.coherent ? <span className="ps-check ok" style={{ padding: 0, background: "none" }}><Check size={12} /> coherent</span>
+                : <span className="ps-check" style={{ padding: 0, background: "none" }}><ShieldAlert size={12} /> {r.issues.length} issue(s)</span>}</td>
+              <td className="ps-mono">{r.proxy ? (r.proxy.country || r.proxy.host) : "—"}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+    );
+  }
+
+  const rows = data?.profiles || [];
+  const s = data?.summary || {};
+  const act = async (id, label, fn) => {
+    setBusy(b => ({ ...b, [id]: label }));
+    try { await fn(); await load(); await refresh(); }
+    catch (e) { alert(`${label} failed: ` + e.message); }
+    setBusy(b => { const n = { ...b }; delete n[id]; return n; });
+  };
+
+  return (
+    <div className="ps-scroll">
+      <div className="ps-health-summary">
+        <HealthChip label="Profiles" value={s.total ?? "—"} />
+        <HealthChip label="Coherent" value={`${s.coherent ?? 0}/${s.total ?? 0}`} color={T.mint} />
+        <HealthChip label="With proxy" value={`${s.withProxy ?? 0}/${s.total ?? 0}`} color={T.lilac} />
+        <HealthChip label="Scheduled" value={s.scheduled ?? 0} color={T.violet} />
+        <HealthChip label="Needs attention" value={s.needsAttention ?? 0} color={s.needsAttention ? T.amber : T.mint} />
+        <div style={{ flex: 1 }} />
+        <button className="ps-btn ghost sm" onClick={load}><RefreshCw size={13} /> Refresh</button>
+      </div>
+
+      {rows.length === 0
+        ? <div className="ps-empty"><Activity size={26} color={T.dim} /><div>No profiles yet.</div></div>
+        : (
+          <table className="ps-table">
+            <thead><tr>
+              <th>Profile</th><th>Engine</th><th>Coherence</th><th>Proxy</th>
+              <th>Trust</th><th>Warm-up</th><th>Last active</th>
+              <th style={{ width: 150, textAlign: "right" }}>Actions</th>
+            </tr></thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={r.id} className={"ps-rise" + (r.needsAttention ? " ps-attention" : "")}
+                    style={{ animationDelay: `${Math.min(i, 12) * 28}ms` }}>
+                  <td>
+                    <button className="ps-linkish" onClick={() => setEditor(profiles.find(p => p.id === r.id) || null)}>{r.name}</button>
+                    {r.status === "running" && <span className="ps-runtag">live</span>}
+                  </td>
+                  <td className="ps-mono dim">{r.engine}</td>
+                  <td>{r.coherent
+                    ? <span style={{ color: T.mint, display: "inline-flex", gap: 5, alignItems: "center" }}><Check size={13} /> ok</span>
+                    : <span style={{ color: T.amber, display: "inline-flex", gap: 5, alignItems: "center" }} title={(r.issues || []).join("; ")}><ShieldAlert size={13} /> {r.issues.length}</span>}</td>
+                  <td className="ps-mono">{r.proxy?.set ? (r.proxy.country || r.proxy.type || "set") : <span className="dim">none</span>}</td>
+                  <td><GradeBadge grade={r.trust?.grade} /></td>
+                  <td className="ps-mono dim">{r.schedule
+                    ? <span title={`${r.schedule.preset}, every ${r.schedule.everyHours}h`} style={{ color: r.schedule.enabled ? T.lilac : T.dim }}><Clock size={11} /> {r.schedule.everyHours}h</span>
+                    : "—"}</td>
+                  <td className="ps-mono dim">{r.lastActive}</td>
+                  <td>
+                    <div className="ps-actions">
+                      <button title="Run trust check" className="run" disabled={!!busy[r.id] || r.status === "running"}
+                        onClick={() => act(r.id, "Trust check", () => api.trust(r.id))}>
+                        {busy[r.id] === "Trust check" ? <RefreshCw size={13} className="ps-spin" /> : <ShieldCheck size={13} />}
+                      </button>
+                      <button title="Auto-adjust to grade A" className="run" disabled={!!busy[r.id] || r.status === "running"}
+                        onClick={() => act(r.id, "Auto-adjust", () => api.align(r.id))}>
+                        {busy[r.id] === "Auto-adjust" ? <RefreshCw size={13} className="ps-spin" /> : <Sparkles size={13} />}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      <div className="ps-hint"><Activity size={12} /> Coherence and proxy are read from each profile instantly; the <b style={{ color: T.text }}>trust grade is the last one measured</b> (a live check opens a real browser). Use <ShieldCheck size={11} /> to grade a profile and <Sparkles size={11} /> to auto-adjust it to grade A. Rows needing attention (incoherent, or grade C/D) are highlighted.</div>
+    </div>
+  );
+}
+
+function HealthChip({ label, value, color }) {
+  return (
+    <div className="ps-hchip">
+      <span className="ps-hchip-val" style={color ? { color } : undefined}>{value}</span>
+      <span className="ps-hchip-label">{label}</span>
+    </div>
+  );
 }
 
 function ProxiesView({ profiles, live, refresh }) {
@@ -1514,6 +1721,17 @@ a { color: inherit; }
 .ps-empty { display: flex; flex-direction: column; align-items: center; gap: 13px; padding: 64px; color: ${T.muted}; font-size: 13px; }
 .ps-empty-ic { width: 52px; height: 52px; border-radius: 14px; background: ${T.violetDim}; display: flex; align-items: center; justify-content: center; }
 input[type=checkbox] { accent-color: ${T.violet}; width: 15px; height: 15px; cursor: pointer; }
+
+/* health view */
+.ps-health-summary { display: flex; gap: 10px; align-items: center; margin: 4px 0 16px; flex-wrap: wrap; }
+.ps-hchip { display: flex; flex-direction: column; gap: 2px; padding: 10px 15px; border-radius: 12px; background: ${T.surface}; border: 1px solid ${T.line}; min-width: 92px; }
+.ps-hchip-val { font-family: ${FONT.display}; font-size: 19px; font-weight: 600; color: ${T.text}; }
+.ps-hchip-label { font-size: 10.5px; letter-spacing: .5px; text-transform: uppercase; color: ${T.dim}; }
+.ps-grade { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 6px; border: 1px solid; font-family: ${FONT.mono}; font-size: 12px; font-weight: 700; }
+.ps-table tr.ps-attention td { box-shadow: inset 2px 0 0 ${T.amber}; }
+.ps-linkish { background: none; border: none; color: ${T.text}; font-weight: 600; font-size: 13px; cursor: pointer; padding: 0; font-family: inherit; }
+.ps-linkish:hover { color: ${T.violet}; text-decoration: underline; }
+.ps-runtag { margin-left: 8px; font-size: 9px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: ${T.mint}; background: ${T.mintDim}; padding: 1px 5px; border-radius: 5px; }
 
 /* engines view */
 .ps-eng-hero { padding: 30px 32px 26px; margin: 8px 0 22px; border-radius: 18px; background: radial-gradient(120% 140% at 0% 0%, ${T.violet}22, transparent 55%), linear-gradient(180deg, ${T.bg2}, ${T.surface}); border: 1px solid ${T.line}; position: relative; overflow: hidden; }

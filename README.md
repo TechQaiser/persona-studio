@@ -62,11 +62,13 @@ persona-studio/
 | 🔎 **Trust checker** | Grades the *real* browser against the checks a fingerprinter runs |
 | ✨ **Auto-adjust** | One click aligns a profile to what its browser actually presents — grade jumps to A |
 | 📡 **Proxy & leak test** | Exit IP, country and timezone match + WebRTC leak detection |
+| 🌐 **DNS leak check** | Confirms name lookups exit through the proxy, not your real ISP's resolver |
 | 🌐 **Proxy pool** | Import, health-check and assign proxies round-robin across profiles |
 | 🔐 **TLS/JA3 check** | Reads the handshake fingerprint — the one layer JS injection can't reach |
+| ❤️ **Health overview** | One page: coherence, proxy, trust grade and warm-up schedule per profile |
 | 🔑 **Encrypted vault** | Proxy passwords encrypted at rest behind a master password |
 | 🧩 **Extensions** | Per-profile unpacked extensions, isolated from every other profile |
-| ✨ **Warm-up** | Human-paced browsing so a fresh profile isn't obviously fresh |
+| ✨ **Warm-up + schedule** | Human-paced browsing (per-vertical presets) so a fresh profile isn't obviously fresh — and a recurring schedule so it never goes cold |
 | 🤖 **Automation attach** | Drive a live profile from Selenium, Puppeteer or Playwright over CDP |
 | 🔁 **Bulk edit** | One change applied to hundreds of profiles, coherently |
 | 📥 **Migrate in** | Import profiles from GoLogin, AdsPower or Multilogin exports |
@@ -242,11 +244,17 @@ stays the same manager over all of them.
 - [x] Dashboard-side import (GoLogin / AdsPower / Multilogin) — an Import button
       that maps each export to a coherent profile
 
+- [x] DNS leak checker (`persona dns`) — reads which resolvers actually saw the
+      lookups and fails if any escaped the proxy's country
+- [x] Warm-up presets per vertical (`--preset ads|ecommerce|crypto|social|news`)
+- [x] Scheduled warm-up (`persona schedule`) — recurring, unattended; the server
+      fires due runs from a background thread, or drive it from cron with
+      `schedule run-due`
+- [x] Profile health overview — one page grading coherence, proxy, cached trust
+      and warm-up schedule across every profile, with one-click fix
+
 **Next**
 
-- [ ] DNS leak checker (needs a resolver-side probe, not just the browser)
-- [ ] Cookie warm-up presets per vertical (ads, e-commerce, crypto)
-- [ ] Scheduled warm-up (recurring, unattended)
 - [ ] Cloud sync + team roles — deliberately unbuilt: it needs a hosted backend,
       accounts and a threat model of its own. Persona stays local-first until
       that's designed properly rather than bolted on.

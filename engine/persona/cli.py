@@ -13,10 +13,12 @@ Command-line interface for Persona.
     persona check <name|id>                       (validate fingerprint coherence)
     persona trust <name|id>                       (score it like a fingerprinter would)
     persona proxy test <name|id>                  (exit IP, country + WebRTC leaks)
+    persona dns <name|id>                         (do DNS lookups leak past the proxy?)
     persona tls <name|id>                         (TLS/JA3 handshake — the pre-JS layer)
     persona cookies list|export|import <name|id>  (move a session in or out)
     persona ext list|add|remove <name|id> [path]  (browser extensions)
-    persona warmup <name|id> [--minutes]          (age a fresh profile by browsing)
+    persona warmup <name|id> [--minutes] [--preset]  (age a fresh profile by browsing)
+    persona schedule add|list|remove|run-due      (recurring unattended warm-up)
     persona attach <name|id> [--port]             (open it for Selenium/Puppeteer/Playwright)
     persona apply [refs] [--tag|--all] --engine …  (one change, many profiles)
     persona engines                               (list launch engines + install status)
@@ -325,6 +327,26 @@ def cmd_tls(args, store: ProfileStore) -> int:
     return 0 if res["ok"] else 1
 
 
+def cmd_dns(args, store: ProfileStore) -> int:
+    prof = _resolve_or_fail(args, store)
+    if not prof:
+        return 1
+    from .probe import check_dns
+    if not args.json:
+        print(_c(f"Checking '{prof.name}' for DNS leaks...", C.CYN))
+    res = check_dns(prof, store, engine=args.engine)
+    if args.json:
+        print(json.dumps(res))
+        return 0 if res.get("ok") else 1
+    if res.get("error"):
+        print(_c(f"Failed: {res['error']}", C.RED))
+        return 1
+    if res.get("countries"):
+        print(f"  resolvers    {len(res['resolvers'])} in {', '.join(res['countries'])}")
+    _print_checks(res["checks"])
+    return 0 if res["ok"] else 1
+
+
 def cmd_trust(args, store: ProfileStore) -> int:
     prof = _resolve_or_fail(args, store)
     if not prof:
@@ -406,12 +428,78 @@ def cmd_warmup(args, store: ProfileStore) -> int:
     if not prof:
         return 1
     from .warmup import warm_up
-    print(_c(f"Warming up '{prof.name}' for {args.minutes} minute(s)...", C.CYN))
+    where = f" ({args.preset})" if args.preset and not args.site else ""
+    print(_c(f"Warming up '{prof.name}'{where} for {args.minutes} minute(s)...", C.CYN))
     res = warm_up(prof, store, minutes=args.minutes, sites=args.site or None,
-                  engine=args.engine, headless=args.headless, on_event=print)
+                  engine=args.engine, headless=args.headless, preset=args.preset,
+                  on_event=print)
     print(_c(f"Done — visited {res['pages']} page(s)"
              + (f", {res['errors']} unreachable" if res["errors"] else "") + ".", C.GRN))
     return 0
+
+
+def cmd_schedule(args, store: ProfileStore) -> int:
+    import time as _time
+
+    from .scheduler import ScheduleStore, due_schedules, next_run_at
+    from .warmup import warm_up
+
+    sched = ScheduleStore(store.root)
+    sub = args.schedule_command
+
+    if sub == "list":
+        rows = sched.list()
+        if not rows:
+            print(_c("No warm-up schedules.", C.DIM))
+            return 0
+        by_id = {p.id: p.name for p in store.list()}
+        for s in rows:
+            name = by_id.get(s["profileId"], s["profileId"])
+            state = _c("on", C.GRN) if s.get("enabled", True) else _c("off", C.DIM)
+            nxt = next_run_at(s)
+            when = "now" if nxt <= _time.time() else _time.strftime("%Y-%m-%d %H:%M", _time.localtime(nxt))
+            print(f"  {s['id']}  {name:<20} every {s['everyHours']}h  "
+                  f"{s['minutes']}min  {s['preset']:<10} [{state}]  next: {when}")
+        return 0
+
+    if sub == "add":
+        prof = _resolve_or_fail(args, store)
+        if not prof:
+            return 1
+        entry = sched.add(profile_id=prof.id, every_hours=args.every,
+                          minutes=args.minutes, preset=args.preset or "general",
+                          now=_time.time())
+        print(_c(f"Scheduled '{prof.name}' — warm up every {entry['everyHours']}h "
+                 f"for {entry['minutes']}min ({entry['preset']}).", C.GRN))
+        print(_c(f"  id {entry['id']}", C.DIM))
+        return 0
+
+    if sub == "remove":
+        ok = sched.delete(args.id)
+        print(_c("Removed.", C.GRN) if ok else _c("No schedule with that id.", C.RED))
+        return 0 if ok else 1
+
+    if sub == "run-due":
+        now = _time.time()
+        due = due_schedules(sched.list(), now)
+        if not due:
+            print(_c("Nothing due.", C.DIM))
+            return 0
+        by_id = {p.id: p for p in store.list()}
+        ran = 0
+        for s in due:
+            prof = by_id.get(s["profileId"])
+            if not prof:
+                print(_c(f"  skip {s['id']} — profile {s['profileId']} not in this store", C.YEL))
+                continue
+            print(_c(f"  warming '{prof.name}' ({s['preset']}, {s['minutes']}min)...", C.CYN))
+            warm_up(prof, store, minutes=s["minutes"], preset=s["preset"], headless=True)
+            sched.mark_run(s["id"], _time.time())
+            ran += 1
+        print(_c(f"Ran {ran} due schedule(s).", C.GRN))
+        return 0
+
+    return 1
 
 
 def cmd_attach(args, store: ProfileStore) -> int:
@@ -748,6 +836,12 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--json", action="store_true", help="Print the raw result as JSON")
     c.set_defaults(func=cmd_tls)
 
+    c = sub.add_parser("dns", help="Check whether DNS lookups leak past the proxy")
+    c.add_argument("ref")
+    c.add_argument("--engine", help="Test with a different engine than the profile's")
+    c.add_argument("--json", action="store_true", help="Print the raw result as JSON")
+    c.set_defaults(func=cmd_dns)
+
     c = sub.add_parser("trust", help="Score the profile the way a fingerprinter would")
     c.add_argument("ref")
     c.add_argument("--engine", help="Inspect with a different engine than the profile's")
@@ -782,10 +876,29 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("ref")
     c.add_argument("--minutes", type=float, default=5, help="How long to browse (default: 5)")
     c.add_argument("--site", action="append",
-                   help="Site to visit (repeatable; replaces the default list)")
+                   help="Site to visit (repeatable; replaces the preset/default list)")
+    c.add_argument("--preset", choices=["general", "ads", "ecommerce", "crypto", "social", "news"],
+                   help="Per-vertical warm-up set to browse (default: general)")
     c.add_argument("--headless", action="store_true")
     c.add_argument("--engine")
     c.set_defaults(func=cmd_warmup)
+
+    c = sub.add_parser("schedule", help="Recurring unattended warm-up (add/list/remove/run-due)")
+    sc = c.add_subparsers(dest="schedule_command", required=True)
+    s = sc.add_parser("list", help="Show all warm-up schedules and when they next run")
+    s.set_defaults(func=cmd_schedule)
+    s = sc.add_parser("add", help="Schedule a recurring warm-up for a profile")
+    s.add_argument("ref")
+    s.add_argument("--every", type=float, required=True, help="Interval in hours (e.g. 12)")
+    s.add_argument("--minutes", type=float, default=5, help="How long each warm-up runs")
+    s.add_argument("--preset", choices=["general", "ads", "ecommerce", "crypto", "social", "news"],
+                   help="Per-vertical warm-up set (default: general)")
+    s.set_defaults(func=cmd_schedule)
+    s = sc.add_parser("remove", help="Delete a schedule by id")
+    s.add_argument("id")
+    s.set_defaults(func=cmd_schedule)
+    s = sc.add_parser("run-due", help="Run every schedule that's due now (for cron/Task Scheduler)")
+    s.set_defaults(func=cmd_schedule)
 
     c = sub.add_parser("attach", help="Open the profile with DevTools for your own automation")
     c.add_argument("ref")

@@ -48,9 +48,11 @@ export const api = {
   proxyTest: (id) => req("POST", `/api/profiles/${id}/proxy-test`),
   trust: (id) => req("POST", `/api/profiles/${id}/trust`),
   tls: (id) => req("POST", `/api/profiles/${id}/tls`),
+  // DNS leak check: do name lookups escape the proxy to your real ISP?
+  dns: (id) => req("POST", `/api/profiles/${id}/dns`),
   // Auto-adjust: align the profile to what its browser actually presents.
   align: (id) => req("POST", `/api/profiles/${id}/align`),
-  warmup: (id, minutes) => req("POST", `/api/profiles/${id}/warmup`, { minutes }),
+  warmup: (id, minutes, preset) => req("POST", `/api/profiles/${id}/warmup`, { minutes, preset }),
   bulkUpdate: (ids, patch) => req("POST", "/api/profiles/bulk", { ids, patch }),
   // Bulk create at scale: save a chunk of generated profiles in one request.
   batchCreate: (profiles) => req("POST", "/api/profiles/batch", { profiles }),
@@ -62,4 +64,11 @@ export const api = {
   deleteProxy: (id) => req("DELETE", `/api/proxies/${id}`),
   testProxy: (id) => req("POST", `/api/proxies/${id}/test`),
   assignProxies: (profileIds, proxyIds) => req("POST", "/api/proxies/assign", { profileIds, proxyIds }),
+  // Scheduled warm-up: recurring, unattended aging of a profile's session.
+  listSchedules: () => req("GET", "/api/schedules"),
+  addSchedule: (s) => req("POST", "/api/schedules", s),
+  updateSchedule: (id, patch) => req("PUT", `/api/schedules/${id}`, patch),
+  deleteSchedule: (id) => req("DELETE", `/api/schedules/${id}`),
+  // Health overview: coherence, proxy, cached trust grade and schedule per profile.
+  health: () => req("GET", "/api/profiles/health"),
 };

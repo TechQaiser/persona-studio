@@ -59,8 +59,16 @@ import isn't wired yet.)
 persona trust acct-01            # score it the way a fingerprinting script would
 persona align acct-01            # auto-adjust: match the profile to what the browser shows
 persona proxy test acct-01       # exit IP, country, timezone match + WebRTC leaks
+persona dns acct-01              # do DNS lookups exit through the proxy, or leak to your ISP?
 persona tls acct-01              # the TLS/JA3 handshake — the one layer JS can't touch
 ```
+
+`dns` is the companion to `proxy test`: even with the proxy hiding your IP, if
+name lookups go to your own ISP's resolver the sites you visit are still visible
+at your real location. It hands a third-party test service a batch of unique
+subdomains to resolve, reads back which resolvers actually did the work, and
+fails if any sits outside the proxy's country. (It's also folded into `proxy
+test`.) Needs internet.
 
 `align` is the fix for a low trust score. The checker fails whenever the
 *declared* identity and the *presented* one disagree — which is unavoidable with
@@ -98,7 +106,11 @@ baseline.
 ```bash
 persona ext add acct-01 ./ublock        # unpacked folder (the one with manifest.json)
 persona ext list acct-01
-persona warmup acct-01 --minutes 10     # browse normally so the session isn't brand-new
+persona warmup acct-01 --minutes 10               # browse normally so the session isn't brand-new
+persona warmup acct-01 --preset crypto            # warm up on that vertical's sites
+persona schedule add acct-01 --every 12 --preset ads   # recurring, unattended warm-up
+persona schedule list                             # what's scheduled and when it next runs
+persona schedule run-due                          # run everything due now (for cron/Task Scheduler)
 persona attach acct-01 --port 9222      # open it for Selenium / Puppeteer / Playwright
 ```
 
@@ -106,6 +118,15 @@ persona attach acct-01 --port 9222      # open it for Selenium / Puppeteer / Pla
 ready-to-paste snippets. Your automation drives *that* browser, so the identity,
 proxy and session stay exactly as Persona set them up — a browser started by
 Selenium itself would have none of them.
+
+`warmup --preset` browses a per-vertical site set (`ads`, `ecommerce`, `crypto`,
+`social`, `news`, or the default `general`) so the session's history looks like
+a real user of that world, not a random walk. `schedule` reruns it unattended on
+an interval: when `persona serve` is running it fires the due warm-ups itself
+from a background thread; without the server, put `persona schedule run-due` on
+cron or Windows Task Scheduler and it runs whatever's due. This keeps a session
+that you log into once from going "cold" — no fresh cookies, an about-to-expire
+token — which is itself a signal on your next visit.
 
 ### Changing many profiles at once
 
@@ -187,10 +208,12 @@ dashboard uses to manage and launch profiles for real. It listens on
 | GET | `/api/profiles/{id}/cookies` | Read the profile's cookie jar |
 | POST | `/api/profiles/{id}/cookies` | Import cookies (`text` or `cookies`, plus `clear`) |
 | POST | `/api/profiles/{id}/proxy-test` | Exit IP, country and WebRTC leak check |
-| POST | `/api/profiles/{id}/trust` | Trust score + the individual checks |
+| POST | `/api/profiles/{id}/trust` | Trust score + the individual checks (grade is cached for Health) |
 | POST | `/api/profiles/{id}/align` | Auto-adjust to what the browser presents; before→after |
 | POST | `/api/profiles/{id}/tls` | TLS/JA3/JA4 handshake fingerprint |
-| POST | `/api/profiles/{id}/warmup` | Start a background warm-up (`minutes`) |
+| POST | `/api/profiles/{id}/dns` | DNS leak check — which resolvers see the lookups |
+| POST | `/api/profiles/{id}/warmup` | Start a background warm-up (`minutes`, `preset`) |
+| GET | `/api/profiles/health` | One row per profile: coherence, proxy, cached trust, schedule |
 | POST | `/api/profiles/bulk` | Apply one `patch` to many `ids` |
 | POST | `/api/profiles/batch` | Save many generated `profiles` at once (bulk create) |
 | POST | `/api/profiles/import` | Import GoLogin/AdsPower/Multilogin export `text` |
@@ -199,6 +222,10 @@ dashboard uses to manage and launch profiles for real. It listens on
 | DELETE | `/api/proxies/{id}` | Remove a proxy from the pool |
 | POST | `/api/proxies/{id}/test` | Health-check one proxy (exit IP/country) |
 | POST | `/api/proxies/assign` | Assign the pool round-robin across profiles |
+| GET | `/api/schedules` | List warm-up schedules + when each next runs |
+| POST | `/api/schedules` | Schedule a recurring warm-up for a profile |
+| PUT | `/api/schedules/{id}` | Change interval / preset / enabled |
+| DELETE | `/api/schedules/{id}` | Remove a schedule |
 | POST | `/api/fingerprint/validate` | Coherence check a fingerprint |
 
 ## Python API
@@ -226,10 +253,11 @@ store.save(profile)
 | `cookies.py` | Cookie import/export across the formats people actually have |
 | `crypto.py` | Encrypt-at-rest for secrets (optional `cryptography` backend) |
 | `importers.py` | Tolerant import from GoLogin / AdsPower / Multilogin exports |
-| `probe.py` | Proxy/leak/TLS test, the trust report, and the auto-aligner (`align`) |
+| `probe.py` | Proxy/DNS/leak/TLS test, the trust report, and the auto-aligner (`align`) |
 | `bulk.py` | Multi-profile synchroniser + bulk generator (`generate_profiles`) |
 | `proxypool.py` | Parse pasted proxy lists (any layout) + health-check them |
-| `warmup.py` | Human-paced browsing that gives a fresh profile a past |
+| `warmup.py` | Human-paced browsing (per-vertical presets) that gives a fresh profile a past |
+| `scheduler.py` | Recurring unattended warm-up bookkeeping (`persona schedule`) |
 | `automation.py` | CDP attach so Selenium/Puppeteer/Playwright can drive a profile |
 | `stealth.py` | Generates the page-level JS patch for a fingerprint |
 | `launcher.py` | Thin dispatcher: picks the profile's engine and hands off |

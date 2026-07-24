@@ -35,6 +35,64 @@ DEFAULT_SITES = [
     "https://www.imdb.com/chart/top/",
 ]
 
+# Per-vertical warm-up sets. The account you're aging usually lives in one
+# world — an ad account, a store, a crypto wallet — and its "normal" browsing
+# history looks like that world, not a random walk. Seeding the cookie jar and
+# history with sites of the right kind makes the profile read as a real user of
+# that vertical, and (for ads especially) primes the ad/analytics cookies a
+# real visitor would already carry. All neutral, publicly reachable pages.
+PRESETS = {
+    "general": DEFAULT_SITES,
+    "ads": [
+        "https://www.youtube.com/",
+        "https://www.forbes.com/",
+        "https://www.cnn.com/",
+        "https://www.espn.com/",
+        "https://www.buzzfeed.com/",
+        "https://www.weather.com/",
+        "https://www.accuweather.com/",
+    ],
+    "ecommerce": [
+        "https://www.amazon.com/",
+        "https://www.ebay.com/",
+        "https://www.etsy.com/",
+        "https://www.walmart.com/",
+        "https://www.bestbuy.com/",
+        "https://www.aliexpress.com/",
+        "https://www.target.com/",
+    ],
+    "crypto": [
+        "https://www.coingecko.com/",
+        "https://coinmarketcap.com/",
+        "https://www.tradingview.com/",
+        "https://www.binance.com/en",
+        "https://www.reddit.com/r/CryptoCurrency/",
+        "https://cointelegraph.com/",
+        "https://decrypt.co/",
+    ],
+    "social": [
+        "https://www.reddit.com/r/popular/",
+        "https://www.pinterest.com/",
+        "https://www.quora.com/",
+        "https://www.tumblr.com/explore",
+        "https://medium.com/",
+        "https://www.youtube.com/",
+    ],
+    "news": [
+        "https://www.bbc.com/news",
+        "https://www.reuters.com/",
+        "https://apnews.com/",
+        "https://www.theguardian.com/",
+        "https://www.cnbc.com/",
+        "https://news.ycombinator.com/",
+    ],
+}
+
+
+def preset_sites(name: Optional[str]) -> list[str]:
+    """Resolve a preset name to its site list (falling back to the general set)."""
+    return list(PRESETS.get((name or "general").lower(), DEFAULT_SITES))
+
 
 def _human_pause(rng: random.Random, lo: float, hi: float) -> None:
     time.sleep(rng.uniform(lo, hi))
@@ -78,14 +136,17 @@ def _follow_internal_link(page, rng: random.Random) -> bool:
 
 def warm_up(profile: Profile, store: ProfileStore, minutes: float = 5,
             sites: Optional[list[str]] = None, engine: Optional[str] = None,
-            headless: bool = False, on_event: Optional[Callable[[str], None]] = None) -> dict:
+            headless: bool = False, preset: Optional[str] = None,
+            on_event: Optional[Callable[[str], None]] = None) -> dict:
     """Browse for ``minutes`` to age the profile. Returns a small summary.
 
+    ``sites`` wins if given; otherwise ``preset`` picks a per-vertical set
+    (``ads``/``ecommerce``/``crypto``/``social``/``news``/``general``).
     ``on_event`` receives progress lines so a CLI can narrate the run; the
     dashboard just waits for the summary.
     """
     rng = random.Random()
-    pool = list(sites or DEFAULT_SITES)
+    pool = list(sites) if sites else preset_sites(preset)
     rng.shuffle(pool)
     say = on_event or (lambda _msg: None)
 
@@ -118,4 +179,5 @@ def warm_up(profile: Profile, store: ProfileStore, minutes: float = 5,
             _human_pause(rng, 1.0, 3.0)
 
     return {"visited": visited, "pages": len(visited), "errors": errors,
-            "minutes": round(minutes, 2)}
+            "minutes": round(minutes, 2),
+            "preset": (preset or "general").lower() if not sites else "custom"}

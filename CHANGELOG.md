@@ -5,6 +5,33 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Profile health overview** (`GET /api/profiles/health`, dashboard **Health**
+  page): one row per profile grading it at a glance — coherence (computed
+  instantly from the stored fingerprint), whether a proxy is set and its country,
+  the last measured trust grade (cached from the last trust/align run, since a
+  live check opens a real browser), any warm-up schedule, and last-active. Rows
+  that need attention (incoherent, or a C/D trust grade) are flagged, with
+  one-click **trust check** and **auto-adjust** per row.
+- **Scheduled warm-up** (`persona schedule`, `scheduler.py`, `/api/schedules*`):
+  recurring, unattended warm-up so a session you log into once doesn't go
+  "cold". Add a schedule per profile (interval + vertical); when `persona serve`
+  is running a background thread fires the due runs itself, and for people who
+  don't run the server, `persona schedule run-due` runs whatever's due from cron
+  / Windows Task Scheduler. Exposed in the dashboard's Warm-up section as a
+  toggle with interval and vertical controls.
+- **Warm-up presets per vertical** (`persona warmup --preset`, `warmup.PRESETS`):
+  `ads`, `ecommerce`, `crypto`, `social`, `news` (or the default `general`) each
+  browse a site set that matches the account's world, so its history reads like
+  a real user of that vertical rather than a random walk. Chosen from a dropdown
+  in the dashboard; passed through `POST /api/profiles/{id}/warmup`.
+- **DNS leak checker** (`persona dns`, `probe.check_dns`,
+  `/api/profiles/{id}/dns`): the companion to the proxy test — even with the
+  proxy hiding your IP, DNS lookups that go to your own ISP's resolver still
+  reveal the sites you visit at your real location. It resolves a batch of
+  unique subdomains through the profile, reads back which resolvers were seen
+  (and their countries) from a third-party test service, and fails if any sits
+  outside the proxy's country. Folded into `proxy test` and surfaced as a **DNS
+  leak test** button next to the connection test in the dashboard.
 - **Proxy pool — import, test, assign** (`proxypool.py`, `/api/proxies*`):
   a managed pool the dashboard's Proxies page now drives for real. Import a
   pasted list or file in any common layout (`host:port`, `host:port:user:pass`,

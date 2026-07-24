@@ -26,6 +26,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -333,14 +334,17 @@ def dashboard_coherence(d: dict) -> list[str]:
         return [f"could not validate: {e}"]
 
 
-def create_app(data_dir: Optional[str] = None):
+def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
     _require_fastapi()
     from fastapi import FastAPI, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
 
+    from .scheduler import ScheduleStore, due_schedules, next_run_at
+
     engine_store = ProfileStore(data_dir)
     dash = DashboardStore(engine_store.root)
     pool = ProxyPool(engine_store.root)
+    sched = ScheduleStore(engine_store.root)
     running: dict[str, subprocess.Popen] = {}
 
     app = FastAPI(title="Persona API", version="0.1.0")
@@ -529,24 +533,37 @@ def create_app(data_dir: Optional[str] = None):
 
     @app.post("/api/profiles/{pid}/trust")
     def trust(pid: str):
-        _prepare(pid)
-        return json.loads(_run_cli("trust", pid, "--json"))
+        d = _prepare(pid)
+        rep = json.loads(_run_cli("trust", pid, "--json"))
+        # Remember the last grade so the Health page can show it without
+        # re-launching every profile (a trust run opens a real browser).
+        d["_trust"] = {"grade": rep.get("grade"), "score": rep.get("score"),
+                       "at": time.time()}
+        dash.save(d)
+        return rep
 
     @app.post("/api/profiles/{pid}/tls")
     def tls(pid: str):
         _prepare(pid)
         return json.loads(_run_cli("tls", pid, "--json", allow_fail=True))
 
+    @app.post("/api/profiles/{pid}/dns")
+    def dns(pid: str):
+        _prepare(pid)
+        return json.loads(_run_cli("dns", pid, "--json", allow_fail=True))
+
     @app.post("/api/profiles/{pid}/warmup")
     def warmup(pid: str, body: Optional[dict] = None):
         d = _prepare(pid)
-        minutes = float((body or {}).get("minutes", 5))
+        body = body or {}
+        minutes = float(body.get("minutes", 5))
+        cli = [sys.executable, "-m", "persona", "--data-dir", str(engine_store.root),
+               "warmup", pid, "--minutes", str(minutes), "--headless"]
+        if body.get("preset"):
+            cli += ["--preset", str(body["preset"])]
         # Warm-up runs for minutes, so it goes in the background exactly like a
         # launch — the profile shows as running and "stop" ends it.
-        running[pid] = subprocess.Popen(
-            [sys.executable, "-m", "persona", "--data-dir", str(engine_store.root),
-             "warmup", pid, "--minutes", str(minutes), "--headless"],
-        )
+        running[pid] = subprocess.Popen(cli)
         return decorate(d)
 
     @app.post("/api/profiles/{pid}/align")
@@ -565,6 +582,10 @@ def create_app(data_dir: Optional[str] = None):
                         ("locale", "locale"), ("timezone", "timezone")):
             if fp.get(src) is not None:
                 d[dst] = fp[src]
+        after = res.get("after") or {}
+        if after.get("grade"):
+            d["_trust"] = {"grade": after["grade"], "score": after.get("score"),
+                           "at": time.time()}
         res["profile"] = decorate(dash.save(d))
         return res
 
@@ -700,6 +721,136 @@ def create_app(data_dir: Optional[str] = None):
             dash.save(prof)
             assigned += 1
         return {"assigned": assigned, "pool": len(proxies)}
+
+    # ---- Scheduled warm-up ----------------------------------------------
+    def _spawn_warmup(pid: str, minutes: float, preset: Optional[str]) -> None:
+        """Launch a headless warm-up in the background (shared by the endpoint
+        and the scheduler). The profile shows as running until it finishes."""
+        cli = [sys.executable, "-m", "persona", "--data-dir", str(engine_store.root),
+               "warmup", pid, "--minutes", str(minutes), "--headless"]
+        if preset:
+            cli += ["--preset", str(preset)]
+        running[pid] = subprocess.Popen(cli)
+
+    def _decorate_schedule(s: dict) -> dict:
+        d = dash.get(s["profileId"])
+        nxt = next_run_at(s)
+        return {**s, "profileName": (d or {}).get("name", s["profileId"]),
+                "nextRun": nxt, "due": nxt <= time.time()}
+
+    @app.get("/api/schedules")
+    def list_schedules():
+        return [_decorate_schedule(s) for s in sched.list()]
+
+    @app.post("/api/schedules")
+    def add_schedule(body: dict):
+        pid = body.get("profileId")
+        if not pid or not dash.get(pid):
+            raise HTTPException(404, "profile not found")
+        entry = sched.add(profile_id=pid, every_hours=float(body.get("everyHours", 12)),
+                          minutes=float(body.get("minutes", 5)),
+                          preset=body.get("preset", "general"),
+                          enabled=bool(body.get("enabled", True)), now=time.time())
+        return _decorate_schedule(entry)
+
+    @app.put("/api/schedules/{sid}")
+    def update_schedule(sid: str, body: dict):
+        patch = {k: body[k] for k in ("everyHours", "minutes", "preset", "enabled")
+                 if k in body}
+        out = sched.update(sid, patch)
+        if not out:
+            raise HTTPException(404, "schedule not found")
+        return _decorate_schedule(out)
+
+    @app.delete("/api/schedules/{sid}")
+    def delete_schedule(sid: str):
+        if not sched.delete(sid):
+            raise HTTPException(404, "schedule not found")
+        return {"ok": True}
+
+    # ---- Health overview -------------------------------------------------
+    @app.get("/api/profiles/health")
+    def profiles_health():
+        """One row per profile with everything the Health page needs, computed
+        cheaply. Coherence and proxy are read straight from the stored profile;
+        the trust grade is the *cached* one from the last trust/align run (a live
+        trust check opens a real browser, too heavy to do for the whole grid)."""
+        by_profile: dict[str, dict] = {}
+        for s in sched.list():
+            # A profile keeps its most-frequent (smallest-interval) schedule row.
+            cur = by_profile.get(s["profileId"])
+            if cur is None or s.get("everyHours", 1e9) < cur.get("everyHours", 1e9):
+                by_profile[s["profileId"]] = s
+
+        rows = []
+        summary = {"total": 0, "running": 0, "coherent": 0, "withProxy": 0,
+                   "scheduled": 0, "graded": 0, "needsAttention": 0}
+        for d in dash.list():
+            pid = d["id"]
+            issues = dashboard_coherence(d)
+            px = d.get("proxy") or {}
+            has_proxy = bool(px.get("host"))
+            trust = d.get("_trust")
+            sc = by_profile.get(pid)
+            run_now = is_running(pid)
+            grade = (trust or {}).get("grade")
+            # "Needs attention" = something a user would want to fix: incoherent,
+            # or a known-poor trust grade.
+            attention = bool(issues) or (grade in ("C", "D"))
+
+            rows.append({
+                "id": pid,
+                "name": d.get("name", pid),
+                "engine": d.get("engine", "playwright"),
+                "os": d.get("os", "Windows"),
+                "status": "running" if run_now else "stopped",
+                "lastActive": "now" if run_now else _rel_time(d.get("_last_active")),
+                "coherent": not issues,
+                "issues": issues,
+                "proxy": {"set": has_proxy, "country": px.get("country") or None,
+                          "type": px.get("type") if has_proxy else None},
+                "trust": trust,
+                "schedule": ({"enabled": sc.get("enabled", True),
+                              "everyHours": sc.get("everyHours"),
+                              "preset": sc.get("preset")} if sc else None),
+                "needsAttention": attention,
+            })
+            summary["total"] += 1
+            summary["running"] += run_now
+            summary["coherent"] += not issues
+            summary["withProxy"] += has_proxy
+            summary["scheduled"] += sc is not None
+            summary["graded"] += trust is not None
+            summary["needsAttention"] += attention
+
+        return {"summary": summary, "profiles": rows}
+
+    def _scheduler_tick() -> None:
+        """Fire any warm-up that's due and whose profile is free right now."""
+        try:
+            for s in due_schedules(sched.list(), time.time()):
+                pid = s["profileId"]
+                d = dash.get(pid)
+                if not d or is_running(pid):
+                    continue        # gone, or busy — try again next tick
+                engine_store.save(to_engine_profile(d))
+                _spawn_warmup(pid, s.get("minutes", 5), s.get("preset"))
+                sched.mark_run(s["id"], time.time())
+        except Exception:           # pragma: no cover - a bad tick must not kill the loop
+            pass
+
+    if start_scheduler:
+        stop = threading.Event()
+
+        def _loop():
+            while not stop.wait(60):     # check once a minute
+                _scheduler_tick()
+
+        threading.Thread(target=_loop, daemon=True, name="persona-scheduler").start()
+
+        @app.on_event("shutdown")
+        def _stop_scheduler():
+            stop.set()
 
     return app
 
