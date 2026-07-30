@@ -768,6 +768,17 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
             raise HTTPException(404, "schedule not found")
         return {"ok": True}
 
+    # ---- Fingerprint collisions -----------------------------------------
+    @app.get("/api/profiles/collisions")
+    def profiles_collisions():
+        """Profiles that share a fingerprint — a cross-account linkage risk.
+
+        Converts each stored dashboard profile to its engine fingerprint and
+        groups the ones that look like the same device."""
+        from .collision import find_collisions
+        profs = [to_engine_profile(d) for d in dash.list()]
+        return {"total": len(profs), "groups": find_collisions(profs)}
+
     # ---- Health overview -------------------------------------------------
     @app.get("/api/profiles/health")
     def profiles_health():
@@ -782,10 +793,17 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
             if cur is None or s.get("everyHours", 1e9) < cur.get("everyHours", 1e9):
                 by_profile[s["profileId"]] = s
 
+        profiles = dash.list()
+        # Which profiles share a fingerprint with another? (a linkage risk)
+        from .collision import find_collisions
+        colliding: set[str] = set()
+        for g in find_collisions([to_engine_profile(d) for d in profiles]):
+            colliding.update(m["id"] for m in g["members"])
+
         rows = []
         summary = {"total": 0, "running": 0, "coherent": 0, "withProxy": 0,
-                   "scheduled": 0, "graded": 0, "needsAttention": 0}
-        for d in dash.list():
+                   "scheduled": 0, "graded": 0, "colliding": 0, "needsAttention": 0}
+        for d in profiles:
             pid = d["id"]
             issues = dashboard_coherence(d)
             px = d.get("proxy") or {}
@@ -794,9 +812,10 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
             sc = by_profile.get(pid)
             run_now = is_running(pid)
             grade = (trust or {}).get("grade")
+            collides = pid in colliding
             # "Needs attention" = something a user would want to fix: incoherent,
-            # or a known-poor trust grade.
-            attention = bool(issues) or (grade in ("C", "D"))
+            # a known-poor trust grade, or a fingerprint shared with another profile.
+            attention = bool(issues) or (grade in ("C", "D")) or collides
 
             rows.append({
                 "id": pid,
@@ -807,6 +826,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
                 "lastActive": "now" if run_now else _rel_time(d.get("_last_active")),
                 "coherent": not issues,
                 "issues": issues,
+                "collides": collides,
                 "proxy": {"set": has_proxy, "country": px.get("country") or None,
                           "type": px.get("type") if has_proxy else None},
                 "trust": trust,
@@ -821,6 +841,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
             summary["withProxy"] += has_proxy
             summary["scheduled"] += sc is not None
             summary["graded"] += trust is not None
+            summary["colliding"] += collides
             summary["needsAttention"] += attention
 
         return {"summary": summary, "profiles": rows}

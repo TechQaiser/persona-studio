@@ -6,7 +6,7 @@ import {
   Cpu, MonitorSmartphone, Fingerprint, Wifi, WifiOff, Check, Clipboard,
   Settings, Boxes, Activity, MapPin, Clock, Camera, Mic, Blocks,
   RefreshCw, Server, Sparkles, ArrowRight, Star, Circle,
-  Cookie, Download, Upload,
+  Cookie, Download, Upload, Flame, Link2,
 } from "lucide-react";
 
 /* ================================================================== *
@@ -210,7 +210,7 @@ export default function App() {
   const [editor, setEditor] = useState(null);
   const [bulk, setBulk] = useState(false);
   const [sync, setSync] = useState(false);   // "edit all selected" modal
-  const [filters, setFilters] = useState({ status: "", engine: "", os: "", proxy: "" });
+  const [filters, setFilters] = useState({ status: "", engine: "", os: "", proxy: "", tag: "" });
   const [mode, setMode] = useState("connecting");   // connecting | live | demo
   const [engines, setEngines] = useState(null);      // {name: installed} from API
   const [defaultEngine, setDefaultEngine] = useState(ENGINE_ORDER[0]); // new-profile default
@@ -257,8 +257,14 @@ export default function App() {
       (!filters.status || p.status === filters.status) &&
       (!filters.engine || (p.engine || "playwright") === filters.engine) &&
       (!filters.os || p.os === filters.os) &&
+      (!filters.tag || (p.tags || []).includes(filters.tag)) &&
       (!filters.proxy || (filters.proxy === "with" ? !!p.proxy : !p.proxy))),
     [profiles, folder, query, filters]);
+
+  // Every distinct tag in use, for the filter popover.
+  const allTags = useMemo(
+    () => [...new Set(profiles.flatMap(p => p.tags || []))].sort(),
+    [profiles]);
 
   // Memoised so a 10k-profile list isn't re-scanned on every render / poll tick.
   const { running, proxyCount, coherentCount } = useMemo(() => ({
@@ -383,7 +389,7 @@ export default function App() {
           </div>
 
           {view === "profiles" && (
-            <ProfilesView {...{ filtered, query, setQuery, folder, sel, setSel, toggleSel, allSel, toggleRun, clone, remove, setEditor, setProfiles, setSync, filters, setFilters, live, refresh }} />
+            <ProfilesView {...{ filtered, query, setQuery, folder, sel, setSel, toggleSel, allSel, toggleRun, clone, remove, setEditor, setProfiles, setSync, filters, setFilters, allTags, live, refresh }} />
           )}
           {view === "health" && <HealthView profiles={profiles} live={live} refresh={refresh} setEditor={setEditor} />}
           {view === "engines" && <EnginesView engines={engines} live={live} />}
@@ -429,11 +435,31 @@ export default function App() {
 }
 
 /* ---- Profiles view ----------------------------------------------- */
-function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSel, allSel, toggleRun, clone, remove, setEditor, setProfiles, setSync, filters, setFilters, live, refresh }) {
+function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSel, allSel, toggleRun, clone, remove, setEditor, setProfiles, setSync, filters, setFilters, allTags, live, refresh }) {
   const [filterOpen, setFilterOpen] = useState(false);
   const activeFilters = Object.values(filters).filter(Boolean).length;
   const setFilter = (key, value) => setFilters(f => ({ ...f, [key]: f[key] === value ? "" : value }));
-  const clearFilters = () => setFilters({ status: "", engine: "", os: "", proxy: "" });
+  const clearFilters = () => setFilters({ status: "", engine: "", os: "", proxy: "", tag: "" });
+
+  // Warm up every selected profile (live only — it opens real headless browsers).
+  const warmSelected = async () => {
+    const ids = [...sel];
+    if (!live) { alert("Warm-up runs against the live engine — start `persona serve` first."); return; }
+    setSel(new Set());
+    await Promise.all(ids.map(id => api.warmup(id, 5, "general").catch(() => {})));
+    await refresh();
+  };
+
+  // Export the selected profiles as one JSON file (config: fingerprint, proxy,
+  // tags — not the browser session; use `persona backup` for a full session).
+  const exportSelected = () => {
+    const chosen = filtered.filter(p => sel.has(p.id));
+    const blob = new Blob([JSON.stringify(chosen, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `persona-profiles-${chosen.length}.json`; a.click();
+    URL.revokeObjectURL(url);
+  };
 
   // Pagination keeps the grid responsive when there are thousands of profiles.
   const PAGE = 100;
@@ -468,7 +494,9 @@ function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSe
           <div className="ps-bulkbar">
             <span>{sel.size} selected</span>
             <button onClick={() => { sel.forEach(toggleRun); setSel(new Set()); }}><Play size={13} /> Launch</button>
+            <button onClick={warmSelected}><Flame size={13} /> Warm up</button>
             <button onClick={() => setSync(true)}><Copy size={13} /> Edit all</button>
+            <button onClick={exportSelected}><Download size={13} /> Export</button>
             <button className="danger" onClick={async () => { const ids = [...sel]; setSel(new Set()); if (live) { for (const id of ids) { try { await api.remove(id); } catch {} } await refresh(); } else { setProfiles(ps => ps.filter(p => !ids.includes(p.id))); } }}><Trash2 size={13} /> Delete</button>
           </div>
         )}
@@ -493,6 +521,10 @@ function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSe
                   options={OS_LIST.map(o => [o, o])} />
                 <FilterRow label="Proxy" value={filters.proxy} onPick={v => setFilter("proxy", v)}
                   options={[["with", "With proxy"], ["without", "Direct"]]} />
+                {allTags.length > 0 && (
+                  <FilterRow label="Tag" value={filters.tag} onPick={v => setFilter("tag", v)}
+                    options={allTags.map(t => [t, t])} />
+                )}
               </div>
             </>
           )}
@@ -538,7 +570,11 @@ function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSe
                         <span className={"ps-status " + p.status} />
                         <div>
                           <div className="ps-pname">{p.name}</div>
-                          <div className="ps-tags">{p.tags.map(t => <span key={t} className="ps-tag">{t}</span>)}</div>
+                          <div className="ps-tags">{p.tags.map(t => (
+                            <span key={t} className={"ps-tag clickable" + (filters.tag === t ? " on" : "")}
+                              title={filters.tag === t ? "Clear tag filter" : `Filter by "${t}"`}
+                              onClick={() => setFilter("tag", t)}>{t}</span>
+                          ))}</div>
                         </div>
                       </div>
                     </td>
@@ -1331,7 +1367,8 @@ function HealthView({ profiles, live, refresh, setEditor }) {
   // Demo mode: no engine to grade against, so derive coherence/proxy from the
   // sample profiles and be honest that trust and schedules need the engine.
   if (!live) {
-    const rows = profiles.map(p => ({ ...p, coherent: coherence(p).length === 0, issues: coherence(p) }));
+    const colliding = collidingIds(profiles);
+    const rows = profiles.map(p => ({ ...p, coherent: coherence(p).length === 0, issues: coherence(p), collides: colliding.has(p.id) }));
     const coherent = rows.filter(r => r.coherent).length;
     return (
       <div className="ps-scroll">
@@ -1339,13 +1376,14 @@ function HealthView({ profiles, live, refresh, setEditor }) {
           <HealthChip label="Profiles" value={rows.length} />
           <HealthChip label="Coherent" value={`${coherent}/${rows.length}`} color={T.mint} />
           <HealthChip label="With proxy" value={rows.filter(r => r.proxy).length} color={T.lilac} />
+          <HealthChip label="Shared FP" value={colliding.size} color={colliding.size ? T.amber : T.mint} />
         </div>
-        <div className="ps-hint"><Activity size={12} /> Start the engine (<code>persona serve</code>) for live trust grades, DNS/proxy status and warm-up schedules. Showing coherence derived from the sample profiles.</div>
+        <div className="ps-hint"><Activity size={12} /> Start the engine (<code>persona serve</code>) for live trust grades, DNS/proxy status and warm-up schedules. Showing coherence and fingerprint collisions derived from the sample profiles.</div>
         <table className="ps-table" style={{ marginTop: 12 }}>
           <thead><tr><th>Profile</th><th>Engine</th><th>OS</th><th>Coherence</th><th>Proxy</th></tr></thead>
           <tbody>{rows.map((r, i) => (
-            <tr key={r.id || i}>
-              <td>{r.name}</td>
+            <tr key={r.id || i} className={r.collides ? "ps-attention" : ""}>
+              <td>{r.name}{r.collides && <SharedTag />}</td>
               <td className="ps-mono dim">{r.engine || "—"}</td>
               <td><span className="ps-os">{r.os}</span></td>
               <td>{r.coherent ? <span className="ps-check ok" style={{ padding: 0, background: "none" }}><Check size={12} /> coherent</span>
@@ -1374,6 +1412,7 @@ function HealthView({ profiles, live, refresh, setEditor }) {
         <HealthChip label="Coherent" value={`${s.coherent ?? 0}/${s.total ?? 0}`} color={T.mint} />
         <HealthChip label="With proxy" value={`${s.withProxy ?? 0}/${s.total ?? 0}`} color={T.lilac} />
         <HealthChip label="Scheduled" value={s.scheduled ?? 0} color={T.violet} />
+        <HealthChip label="Shared FP" value={s.colliding ?? 0} color={s.colliding ? T.amber : T.mint} />
         <HealthChip label="Needs attention" value={s.needsAttention ?? 0} color={s.needsAttention ? T.amber : T.mint} />
         <div style={{ flex: 1 }} />
         <button className="ps-btn ghost sm" onClick={load}><RefreshCw size={13} /> Refresh</button>
@@ -1395,6 +1434,7 @@ function HealthView({ profiles, live, refresh, setEditor }) {
                   <td>
                     <button className="ps-linkish" onClick={() => setEditor(profiles.find(p => p.id === r.id) || null)}>{r.name}</button>
                     {r.status === "running" && <span className="ps-runtag">live</span>}
+                    {r.collides && <SharedTag />}
                   </td>
                   <td className="ps-mono dim">{r.engine}</td>
                   <td>{r.coherent
@@ -1423,7 +1463,7 @@ function HealthView({ profiles, live, refresh, setEditor }) {
             </tbody>
           </table>
         )}
-      <div className="ps-hint"><Activity size={12} /> Coherence and proxy are read from each profile instantly; the <b style={{ color: T.text }}>trust grade is the last one measured</b> (a live check opens a real browser). Use <ShieldCheck size={11} /> to grade a profile and <Sparkles size={11} /> to auto-adjust it to grade A. Rows needing attention (incoherent, or grade C/D) are highlighted.</div>
+      <div className="ps-hint"><Activity size={12} /> Coherence and proxy are read from each profile instantly; the <b style={{ color: T.text }}>trust grade is the last one measured</b> (a live check opens a real browser). Use <ShieldCheck size={11} /> to grade a profile and <Sparkles size={11} /> to auto-adjust it to grade A. Rows needing attention (incoherent, grade C/D, or a <Link2 size={11} /> shared fingerprint) are highlighted — regenerate one side of a shared pair so the accounts can't be linked.</div>
     </div>
   );
 }
@@ -1435,6 +1475,28 @@ function HealthChip({ label, value, color }) {
       <span className="ps-hchip-label">{label}</span>
     </div>
   );
+}
+
+// Small "shared FP" flag for a profile that isn't fingerprint-unique.
+function SharedTag() {
+  return (
+    <span className="ps-shared" title="Shares a fingerprint with another profile — a linkage risk">
+      <Link2 size={10} /> shared FP
+    </span>
+  );
+}
+
+// Demo-mode fingerprint collision: which profiles look like the same device.
+// Mirrors engine/collision.py's signature over the fields the sample data has.
+function fpSignature(p) {
+  return [p.os, p.userAgent, p.screen, p.cores, p.memory, p.webglRenderer].join("|");
+}
+function collidingIds(profiles) {
+  const bySig = {};
+  for (const p of profiles) (bySig[fpSignature(p)] ||= []).push(p.id);
+  const out = new Set();
+  for (const ids of Object.values(bySig)) if (ids.length > 1) ids.forEach(id => out.add(id));
+  return out;
 }
 
 function ProxiesView({ profiles, live, refresh }) {
@@ -1702,6 +1764,10 @@ a { color: inherit; }
 .ps-status.stopped { background: ${T.grey}; }
 .ps-tags { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
 .ps-tag { font-size: 10px; color: ${T.muted}; background: ${T.surface}; border: 1px solid ${T.line}; padding: 1px 6px; border-radius: 5px; }
+.ps-tag.clickable { cursor: pointer; transition: border-color .15s, color .15s; }
+.ps-tag.clickable:hover { color: ${T.text}; border-color: ${T.violet}; }
+.ps-tag.on { color: ${T.bg}; background: ${T.violet}; border-color: ${T.violet}; }
+.ps-shared { display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; font-size: 9px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; color: ${T.amber}; background: ${T.amberDim || "rgba(240,180,80,.14)"}; padding: 1px 6px; border-radius: 5px; vertical-align: middle; }
 .ps-env { display: flex; align-items: center; gap: 8px; }
 .ps-os { font-size: 11px; font-weight: 600; color: ${T.lilac}; background: ${T.violetDim}; padding: 2px 8px; border-radius: 6px; }
 .ps-engine-chip { font-size: 11px; font-weight: 500; color: ${T.muted}; background: ${T.surface}; border: 1px solid ${T.line}; padding: 3px 9px; border-radius: 6px; }

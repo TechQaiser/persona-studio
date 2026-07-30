@@ -19,9 +19,10 @@ def client(tmp_path):
     return TestClient(app)
 
 
-def _make_profile(client, name="Acct"):
+def _make_profile(client, name="Acct", **over):
     body = {"name": name, "os": "Windows", "screen": "1920x1080", "cores": 8,
             "memory": 16, "locale": "en-US", "engine": "cloak"}
+    body.update(over)
     return client.post("/api/profiles", json=body).json()
 
 
@@ -64,3 +65,21 @@ def test_health_overview(client):
     assert rows["One"]["coherent"] is True
     assert rows["One"]["trust"] is None
     assert rows["One"]["proxy"]["set"] is False
+
+
+def test_collisions_endpoint_and_health_flag(client):
+    _make_profile(client, "Twin-A")                 # identical default fields ->
+    _make_profile(client, "Twin-B")                 # same engine fingerprint
+    _make_profile(client, "Solo", os="macOS")       # different device -> unique
+
+    data = client.get("/api/profiles/collisions").json()
+    assert data["total"] == 3
+    assert len(data["groups"]) == 1
+    assert {m["name"] for m in data["groups"][0]["members"]} == {"Twin-A", "Twin-B"}
+
+    # The Health overview mirrors it: a summary count and a per-row flag.
+    h = client.get("/api/profiles/health").json()
+    assert h["summary"]["colliding"] == 2
+    rows = {r["name"]: r for r in h["profiles"]}
+    assert rows["Twin-A"]["collides"] is True and rows["Twin-A"]["needsAttention"] is True
+    assert rows["Solo"]["collides"] is False

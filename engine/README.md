@@ -34,9 +34,23 @@ persona default-engine cloak   # set the engine new profiles use (CloakBrowser)
 persona launch acct-01
 persona export acct-01 acct-01.json
 persona import acct-01.json
+persona backup acct-01 acct-01.zip        # profile + whole session, one portable file
+persona restore acct-01.zip               # bring it back (add --new-id to clone it)
+persona collisions                        # any two profiles sharing a fingerprint?
 persona import-from gologin-export.json   # migrate from another anti-detect tool
 persona serve                  # run the HTTP API the dashboard talks to
 ```
+
+`export`/`import` move a profile's *config* (a JSON file). `backup`/`restore`
+move the whole identity — the config **and** its browser session (cookies,
+localStorage) — zipped together, so a warmed-up account survives a move to
+another machine. Treat a backup as sensitive: the archive holds the proxy
+password in plaintext.
+
+`collisions` catches an easy self-inflicted wound: two profiles that render the
+*same* fingerprint (same WebGL, screen, hardware, user-agent) look like one
+device to a site and can be linked, so a ban on one can take the others with it.
+Regenerate one side of each pair (`persona regen <name>`).
 
 ### Migrating from GoLogin / AdsPower / Multilogin
 
@@ -254,6 +268,7 @@ store.save(profile)
 | `crypto.py` | Encrypt-at-rest for secrets (optional `cryptography` backend) |
 | `importers.py` | Tolerant import from GoLogin / AdsPower / Multilogin exports |
 | `probe.py` | Proxy/DNS/leak/TLS test, the trust report, and the auto-aligner (`align`) |
+| `collision.py` | Finds profiles that share a fingerprint (`persona collisions`) |
 | `bulk.py` | Multi-profile synchroniser + bulk generator (`generate_profiles`) |
 | `proxypool.py` | Parse pasted proxy lists (any layout) + health-check them |
 | `warmup.py` | Human-paced browsing (per-vertical presets) that gives a fresh profile a past |

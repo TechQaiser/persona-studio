@@ -5,6 +5,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Fingerprint collision detector** (`persona collisions`, `collision.py`,
+  `GET /api/profiles/collisions`): finds profiles that present the *same*
+  fingerprint — identical WebGL, screen, hardware and user-agent read as one
+  device wearing two hats, so a site can link the accounts and ban them
+  together. Pure logic over the stored profiles (no browser), flagged on the
+  dashboard **Health** page with a "Shared FP" count and a per-row badge, plus a
+  CLI table. `identical` marks the worst case (same canvas/audio seed too).
+- **Backup & restore** (`persona backup` / `persona restore`,
+  `ProfileStore.backup`/`restore`): zip a profile **and its whole browser
+  session** (cookies, localStorage — everything under user-data) into one
+  portable file to archive it or move it to another machine. `restore --new-id`
+  brings it in as a fresh copy instead of overwriting the original. (Unlike
+  `export`/`import`, which move only the config.)
+- **Bulk grid actions & tag filtering** (dashboard): the multi-select bar now
+  also **warms up** and **exports** the selected profiles in one go (alongside
+  the existing launch / edit-all / delete); the filter popover gained a **Tag**
+  filter, and tags shown on a profile are clickable to filter by them.
 - **Profile health overview** (`GET /api/profiles/health`, dashboard **Health**
   page): one row per profile grading it at a glance — coherence (computed
   instantly from the stored fingerprint), whether a proxy is set and its country,

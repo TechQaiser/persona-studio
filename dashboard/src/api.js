@@ -71,4 +71,6 @@ export const api = {
   deleteSchedule: (id) => req("DELETE", `/api/schedules/${id}`),
   // Health overview: coherence, proxy, cached trust grade and schedule per profile.
   health: () => req("GET", "/api/profiles/health"),
+  // Fingerprint collisions: which profiles look like the same device.
+  collisions: () => req("GET", "/api/profiles/collisions"),
 };

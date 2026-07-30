@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
+import zipfile
 from pathlib import Path
 from typing import Optional
 
@@ -200,3 +202,51 @@ class ProfileStore:
         data = json.loads(Path(src).read_text(encoding="utf-8"))
         prof = Profile.from_dict(data)
         return self.save(prof)
+
+    # ---- backup / restore ------------------------------------------------
+    # ``export``/``import_file`` move only the profile *config* (a JSON file).
+    # A backup is the whole identity: the config **and** its browser session
+    # (cookies, localStorage — everything under user-data), zipped into one
+    # portable file you can archive or carry to another machine.
+    def backup(self, profile_id: str, dest: str | Path) -> Optional[Path]:
+        """Zip a profile and its entire browser session into one file.
+
+        The profile JSON inside the archive holds any proxy password in
+        *plaintext* (secrets are decrypted on read), so treat a backup file as
+        sensitive — it grants everything the profile does. Returns the path, or
+        ``None`` if no such profile exists."""
+        prof = self.get(profile_id)
+        if not prof:
+            return None
+        dest = Path(dest)
+        with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("profile.json", json.dumps(prof.to_dict(), indent=2))
+            ud = self.userdata_dir / profile_id
+            if ud.exists():
+                for f in ud.rglob("*"):
+                    if f.is_file():
+                        z.write(f, arcname=str(Path("user-data") / f.relative_to(ud)))
+        return dest
+
+    def restore(self, src: str | Path, new_id: bool = False) -> Profile:
+        """Recreate a profile and its session from a :meth:`backup` archive.
+
+        By default the profile keeps its original id, overwriting any profile
+        already under that id (a true restore). Pass ``new_id=True`` to bring it
+        in as a fresh copy instead — useful for cloning a warmed-up session
+        onto a second machine without the two fighting over one id."""
+        src = Path(src)
+        with zipfile.ZipFile(src, "r") as z:
+            data = json.loads(z.read("profile.json").decode("utf-8"))
+            prof = Profile.from_dict(data)
+            if new_id:
+                prof.id = uuid.uuid4().hex[:12]
+            self.save(prof)
+            ud = self.user_data_path(prof.id)
+            for name in z.namelist():
+                if not name.startswith("user-data/") or name.endswith("/"):
+                    continue
+                target = ud / name[len("user-data/"):]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(z.read(name))
+        return prof

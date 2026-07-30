@@ -252,6 +252,11 @@ stays the same manager over all of them.
       `schedule run-due`
 - [x] Profile health overview — one page grading coherence, proxy, cached trust
       and warm-up schedule across every profile, with one-click fix
+- [x] Fingerprint collision detector (`persona collisions`, Health page) —
+      catches profiles that share a fingerprint before a site links the accounts
+- [x] Backup & restore (`persona backup` / `restore`) — a profile **and its
+      session** zipped into one portable file, movable to another machine
+- [x] Bulk grid actions (warm up / export the selection) + tag filtering
 
 **Next**
 

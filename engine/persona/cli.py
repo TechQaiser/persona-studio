@@ -10,6 +10,9 @@ Command-line interface for Persona.
     persona delete <name|id>
     persona export <name|id> <file>
     persona import <file>
+    persona backup <name|id> <file.zip>           (profile + whole session, portable)
+    persona restore <file.zip> [--new-id]         (recreate a profile from a backup)
+    persona collisions [--json]                   (profiles that share a fingerprint)
     persona check <name|id>                       (validate fingerprint coherence)
     persona trust <name|id>                       (score it like a fingerprinter would)
     persona proxy test <name|id>                  (exit IP, country + WebRTC leaks)
@@ -217,6 +220,48 @@ def cmd_import(args, store: ProfileStore) -> int:
     prof = store.import_file(args.file)
     print(_c(f"Imported '{prof.name}'  ", C.GRN) + _c(f"[{prof.id}]", C.DIM))
     return 0
+
+
+def cmd_backup(args, store: ProfileStore) -> int:
+    prof = store.resolve(args.ref)
+    if not prof:
+        print(_c(f"No profile matching '{args.ref}'.", C.RED))
+        return 1
+    dest = store.backup(prof.id, args.file)
+    print(_c(f"Backed up '{prof.name}' (profile + session) to {dest}", C.GRN))
+    print(_c("  keep it safe — the archive holds the proxy password in plaintext.", C.DIM))
+    return 0
+
+
+def cmd_restore(args, store: ProfileStore) -> int:
+    prof = store.restore(args.file, new_id=args.new_id)
+    print(_c(f"Restored '{prof.name}'  ", C.GRN) + _c(f"[{prof.id}]", C.DIM))
+    return 0
+
+
+def cmd_collisions(args, store: ProfileStore) -> int:
+    from .collision import find_collisions
+    profiles = store.list()
+    groups = find_collisions(profiles)
+    if args.json:
+        print(json.dumps({"total": len(profiles), "groups": groups}))
+        return 0 if not groups else 1
+    if not groups:
+        print(_c(f"No collisions — all {len(profiles)} profile(s) look unique.", C.GRN))
+        return 0
+    clashing = sum(len(g["members"]) for g in groups)
+    print(_c(f"{clashing} of {len(profiles)} profiles share a fingerprint "
+             f"({len(groups)} group(s)):\n", C.YEL))
+    for g in groups:
+        tag = _c(" IDENTICAL (same seed too)", C.RED) if g["identical"] else ""
+        names = ", ".join(m["name"] for m in g["members"])
+        sig = g["signals"]
+        print(_c(f"  • {names}{tag}", C.B))
+        print(_c(f"    {sig['os']} · {sig['webgl_renderer']} · "
+                 f"{sig['screen_width']}x{sig['screen_height']} · "
+                 f"{sig['hardware_concurrency']} cores / {sig['device_memory']}GB", C.DIM))
+    print(_c("\nRegenerate one side of each pair:  persona regen <name>", C.DIM))
+    return 1
 
 
 def _resolve_or_fail(args, store: ProfileStore) -> Optional[Profile]:
@@ -790,6 +835,21 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("import", help="Import a profile from JSON")
     c.add_argument("file")
     c.set_defaults(func=cmd_import)
+
+    c = sub.add_parser("backup", help="Zip a profile + its whole session to a portable file")
+    c.add_argument("ref"); c.add_argument("file", help="Destination .zip")
+    c.set_defaults(func=cmd_backup)
+
+    c = sub.add_parser("restore", help="Recreate a profile + session from a backup zip")
+    c.add_argument("file", help="A backup made with `persona backup`")
+    c.add_argument("--new-id", action="store_true",
+                   help="Import as a fresh copy instead of overwriting the original id")
+    c.set_defaults(func=cmd_restore)
+
+    c = sub.add_parser("collisions",
+                       help="Find profiles that share a fingerprint (a linkage risk)")
+    c.add_argument("--json", action="store_true", help="Print the raw result as JSON")
+    c.set_defaults(func=cmd_collisions)
 
     c = sub.add_parser("import-from",
                        help="Import profiles exported from GoLogin / AdsPower / Multilogin")
