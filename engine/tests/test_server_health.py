@@ -67,6 +67,19 @@ def test_health_overview(client):
     assert rows["One"]["proxy"]["set"] is False
 
 
+def test_attach_rejects_non_chromium_engine(client):
+    # camoufox is Firefox-based — no Chrome DevTools to attach to. The endpoint
+    # must reject it *before* launching anything.
+    prof = _make_profile(client, "Fox", engine="camoufox")
+    r = client.post(f"/api/profiles/{prof['id']}/attach")
+    assert r.status_code == 400
+    assert "DevTools" in r.json()["detail"]
+
+
+def test_attach_unknown_profile_404(client):
+    assert client.post("/api/profiles/nope/attach").status_code == 404
+
+
 def test_collisions_endpoint_and_health_flag(client):
     _make_profile(client, "Twin-A")                 # identical default fields ->
     _make_profile(client, "Twin-B")                 # same engine fingerprint

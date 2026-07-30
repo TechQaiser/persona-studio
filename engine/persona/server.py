@@ -23,6 +23,7 @@ Run it with:  ``persona serve``  (see ``cli.py``).
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
 import sys
 import tempfile
@@ -346,6 +347,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
     pool = ProxyPool(engine_store.root)
     sched = ScheduleStore(engine_store.root)
     running: dict[str, subprocess.Popen] = {}
+    attached: dict[str, dict] = {}   # pid -> CDP connection info while attached
 
     app = FastAPI(title="Persona API", version="0.1.0")
     app.add_middleware(
@@ -457,6 +459,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
 
     def _stop(pid: str):
         proc = running.pop(pid, None)
+        attached.pop(pid, None)          # forget any CDP session it was serving
         if proc and proc.poll() is None:
             proc.terminate()
             try:
@@ -551,6 +554,51 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
     def dns(pid: str):
         _prepare(pid)
         return json.loads(_run_cli("dns", pid, "--json", allow_fail=True))
+
+    def _free_port() -> int:
+        """A currently-unused local TCP port for a DevTools endpoint."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+
+    @app.post("/api/profiles/{pid}/attach")
+    def attach_profile(pid: str):
+        """Open the profile with a Chrome DevTools endpoint your own automation
+        can drive, and return the connection details.
+
+        The browser stays open — attached and 'running' — until it's stopped
+        (POST /stop), exactly like a launch. The attach itself runs as a
+        subprocess that owns the window; we read the DevTools endpoint's own
+        /json/version over HTTP to hand back the WebSocket URL."""
+        from .automation import CHROMIUM_ENGINES, cdp_info, snippets
+        d = dash.get(pid)
+        if not d:
+            raise HTTPException(404, "profile not found")
+        if is_running(pid):
+            info = attached.get(pid)
+            if info:
+                return info                  # already attached — idempotent
+            raise HTTPException(409, "stop the profile first — its session is in use")
+        engine = d.get("engine") or engine_store.get_default_engine()
+        if engine not in CHROMIUM_ENGINES:
+            raise HTTPException(400, f"the '{engine}' engine has no DevTools to attach "
+                                     f"to — use one of: {', '.join(CHROMIUM_ENGINES)}")
+        engine_store.save(to_engine_profile(d))
+        port = _free_port()
+        running[pid] = subprocess.Popen(
+            [sys.executable, "-m", "persona", "--data-dir", str(engine_store.root),
+             "attach", pid, "--port", str(port)],
+        )
+        try:
+            info = cdp_info(port)            # waits for DevTools to answer
+        except RuntimeError as e:
+            _stop(pid)
+            raise HTTPException(500, str(e))
+        ws = info.get("webSocketDebuggerUrl", "")
+        result = {"pid": pid, "port": port, "wsUrl": ws,
+                  "browser": info.get("Browser", ""), "snippets": snippets(port, ws)}
+        attached[pid] = result
+        return result
 
     @app.post("/api/profiles/{pid}/warmup")
     def warmup(pid: str, body: Optional[dict] = None):

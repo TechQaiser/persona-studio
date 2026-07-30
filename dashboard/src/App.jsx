@@ -394,7 +394,8 @@ export default function App() {
           {view === "health" && <HealthView profiles={profiles} live={live} refresh={refresh} setEditor={setEditor} />}
           {view === "engines" && <EnginesView engines={engines} live={live} />}
           {view === "proxies" && <ProxiesView profiles={profiles} live={live} refresh={refresh} />}
-          {!["profiles", "health", "engines", "proxies"].includes(view) && <Placeholder view={view} />}
+          {view === "automation" && <AutomationView profiles={profiles} live={live} refresh={refresh} />}
+          {!["profiles", "health", "engines", "proxies", "automation"].includes(view) && <Placeholder view={view} />}
         </main>
       </div>
 
@@ -1644,10 +1645,133 @@ function ImportProxiesModal({ onClose, onImport }) {
   );
 }
 
+/* ---- Automation view --------------------------------------------- */
+const CDP_LANGS = ["Playwright", "Puppeteer", "Selenium"];
+function cdpSnippet(lang, port) {
+  const base = `http://127.0.0.1:${port}`;
+  if (lang === "Puppeteer")
+    return `const browser = await puppeteer.connect({ browserURL: "${base}" });\nconst [page] = await browser.pages();`;
+  if (lang === "Selenium")
+    return `from selenium import webdriver\nopts = webdriver.ChromeOptions()\nopts.add_experimental_option("debuggerAddress", "127.0.0.1:${port}")\ndriver = webdriver.Chrome(options=opts)`;
+  return `from playwright.sync_api import sync_playwright\npw = sync_playwright().start()\nbrowser = pw.chromium.connect_over_cdp("${base}")\npage = browser.contexts[0].pages[0]`;
+}
+
+function AutomationView({ profiles, live, refresh }) {
+  const [info, setInfo] = useState({});     // pid -> { port, wsUrl, snippets }
+  const [busy, setBusy] = useState("");
+  const [lang, setLang] = useState("Playwright");
+  const [copied, setCopied] = useState("");
+  const CHROMIUM = ["cloak", "patchright", "playwright"];
+
+  const copy = (text, key) => {
+    navigator.clipboard?.writeText(text);
+    setCopied(key); setTimeout(() => setCopied(c => (c === key ? "" : c)), 1200);
+  };
+  const attach = async (id) => {
+    setBusy(id);
+    try { const r = await api.attach(id); setInfo(m => ({ ...m, [id]: r })); await refresh(); }
+    catch (e) { alert("Attach failed: " + e.message); }
+    setBusy("");
+  };
+  const detach = async (id) => {
+    setBusy(id);
+    try { await api.stop(id); setInfo(m => { const n = { ...m }; delete n[id]; return n; }); await refresh(); }
+    catch (e) { alert("Detach failed: " + e.message); }
+    setBusy("");
+  };
+
+  const intro = (
+    <div className="ps-hint"><Zap size={12} /> Persona opens the browser wearing the identity; your script <b style={{ color: T.text }}>attaches to that same window</b> over the Chrome DevTools Protocol — so the session, cookies, proxy and fingerprint stay exactly as set. (A browser your automation launches itself would be un-spoofed.) Chromium engines only — <code>cloak</code>, <code>patchright</code>, <code>playwright</code>.</div>
+  );
+
+  // Demo mode: no engine to attach to, so show how it works with the CLI and a
+  // static example.
+  if (!live) {
+    return (
+      <div className="ps-scroll">
+        {intro}
+        <div className="ps-cdp" style={{ marginTop: 12 }}>
+          <div className="ps-cdp-h"><Server size={13} /> Start the engine, then attach</div>
+          <pre className="ps-code">persona attach acct-01 --port 9222</pre>
+          <div className="ps-lang-tabs">{CDP_LANGS.map(l => (
+            <button key={l} className={"ps-chip" + (lang === l ? " on" : "")} onClick={() => setLang(l)}>{l}</button>
+          ))}</div>
+          <pre className="ps-code">{cdpSnippet(lang, 9222)}</pre>
+        </div>
+        <div className="ps-hint"><Activity size={12} /> Start <code>persona serve</code> to attach a real profile from here with one click.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="ps-scroll">
+      {intro}
+      {profiles.length === 0
+        ? <div className="ps-empty"><Zap size={26} color={T.dim} /><div>No profiles to attach yet.</div></div>
+        : (
+          <table className="ps-table" style={{ marginTop: 12 }}>
+            <thead><tr>
+              <th>Profile</th><th>Engine</th><th>Status</th>
+              <th style={{ width: 160, textAlign: "right" }}>Automation</th>
+            </tr></thead>
+            <tbody>
+              {profiles.map((p, i) => {
+                const canAttach = CHROMIUM.includes(p.engine || "playwright");
+                const conn = info[p.id];
+                const attachedHere = !!conn;
+                const running = p.status === "running";
+                return (
+                  <React.Fragment key={p.id}>
+                    <tr className={"ps-rise" + (attachedHere ? " sel" : "")} style={{ animationDelay: `${Math.min(i, 12) * 28}ms` }}>
+                      <td className="ps-pname">{p.name}</td>
+                      <td><span className="ps-engine-chip">{ENGINE_META[p.engine]?.label || p.engine || "Playwright"}</span></td>
+                      <td>{attachedHere
+                        ? <span style={{ color: T.mint, display: "inline-flex", gap: 5, alignItems: "center" }}><Circle size={9} /> attached :{conn.port}</span>
+                        : running ? <span className="ps-mono dim">running</span> : <span className="ps-mono dim">stopped</span>}</td>
+                      <td>
+                        <div className="ps-actions" style={{ justifyContent: "flex-end" }}>
+                          {attachedHere
+                            ? <button className="danger" title="Close the attached browser" disabled={busy === p.id}
+                                onClick={() => detach(p.id)}>{busy === p.id ? <RefreshCw size={13} className="ps-spin" /> : <Square size={13} />} Detach</button>
+                            : <button className="run" disabled={!canAttach || running || busy === p.id}
+                                title={!canAttach ? "This engine has no DevTools — switch to cloak/patchright/playwright"
+                                       : running ? "Stop the profile first" : "Open with a CDP endpoint"}
+                                onClick={() => attach(p.id)}>{busy === p.id ? <RefreshCw size={13} className="ps-spin" /> : <Zap size={13} />} Attach</button>}
+                        </div>
+                      </td>
+                    </tr>
+                    {attachedHere && (
+                      <tr className="ps-cdp-row"><td colSpan={4}>
+                        <div className="ps-cdp">
+                          <div className="ps-cdp-h"><Server size={13} /> Connect your automation
+                            <span style={{ flex: 1 }} />
+                            <button className="ps-copy" onClick={() => copy(`http://127.0.0.1:${conn.port}`, p.id + "url")}>
+                              <Clipboard size={12} /> {copied === p.id + "url" ? "Copied" : `127.0.0.1:${conn.port}`}</button>
+                          </div>
+                          <div className="ps-lang-tabs">{CDP_LANGS.map(l => (
+                            <button key={l} className={"ps-chip" + (lang === l ? " on" : "")} onClick={() => setLang(l)}>{l}</button>
+                          ))}</div>
+                          <div className="ps-code-wrap">
+                            <pre className="ps-code">{cdpSnippet(lang, conn.port)}</pre>
+                            <button className="ps-copy floaty" onClick={() => copy(cdpSnippet(lang, conn.port), p.id + lang)}>
+                              <Clipboard size={12} /> {copied === p.id + lang ? "Copied" : "Copy"}</button>
+                          </div>
+                        </div>
+                      </td></tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+    </div>
+  );
+}
+
 function Placeholder({ view }) {
   const map = {
     folders: [FolderTree, "Folder manager", "Organize profiles into folders and drag between them."],
-    automation: [Zap, "Automation", "Drive profiles with Playwright/Puppeteer scripts and a REST API."],
     team: [Users, "Team", "Invite members, set roles, and share profiles securely."],
     settings: [Settings, "Settings", "Engine paths, storage location, and defaults."],
   };
@@ -1768,6 +1892,15 @@ a { color: inherit; }
 .ps-tag.clickable:hover { color: ${T.text}; border-color: ${T.violet}; }
 .ps-tag.on { color: ${T.bg}; background: ${T.violet}; border-color: ${T.violet}; }
 .ps-shared { display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; font-size: 9px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; color: ${T.amber}; background: ${T.amberDim || "rgba(240,180,80,.14)"}; padding: 1px 6px; border-radius: 5px; vertical-align: middle; }
+.ps-cdp-row td { padding: 0 !important; background: none; }
+.ps-cdp { margin: 2px 0 14px; border: 1px solid ${T.line}; border-radius: 10px; background: ${T.surface}; padding: 14px; }
+.ps-cdp-h { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: ${T.muted}; margin-bottom: 10px; }
+.ps-lang-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+.ps-code-wrap { position: relative; }
+.ps-code { font-family: ${FONT.mono}; font-size: 12px; line-height: 1.55; color: ${T.text}; background: ${T.bg}; border: 1px solid ${T.line}; border-radius: 8px; padding: 12px 14px; margin: 0; overflow-x: auto; white-space: pre; }
+.ps-copy { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-family: ${FONT.mono}; color: ${T.lilac}; background: ${T.violetDim}; border: 1px solid ${T.line}; border-radius: 6px; padding: 3px 9px; cursor: pointer; transition: color .15s, border-color .15s; }
+.ps-copy:hover { color: ${T.text}; border-color: ${T.violet}; }
+.ps-copy.floaty { position: absolute; top: 8px; right: 8px; }
 .ps-env { display: flex; align-items: center; gap: 8px; }
 .ps-os { font-size: 11px; font-weight: 600; color: ${T.lilac}; background: ${T.violetDim}; padding: 2px 8px; border-radius: 6px; }
 .ps-engine-chip { font-size: 11px; font-weight: 500; color: ${T.muted}; background: ${T.surface}; border: 1px solid ${T.line}; padding: 3px 9px; border-radius: 6px; }

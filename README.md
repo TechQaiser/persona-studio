@@ -223,7 +223,8 @@ stays the same manager over all of them.
       Playwright storage state, Netscape `cookies.txt`
 
 - [x] Account warm-up — human-paced browsing that ages a fresh profile
-- [x] Local automation API — `persona attach` opens CDP for Selenium/Puppeteer/Playwright
+- [x] Local automation API — `persona attach` opens CDP for Selenium/Puppeteer/Playwright,
+      plus a dashboard **Automation** page (one-click attach + copy-paste connect snippets)
 - [x] Multi-profile synchronizer — `persona apply`, plus "Edit all" in the dashboard
 - [x] Proxy tester + WebRTC leak checker (`persona proxy test`)
 - [x] Fingerprint trust checker (`persona trust`) — grades the real browser, not the config

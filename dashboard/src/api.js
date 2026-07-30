@@ -52,6 +52,9 @@ export const api = {
   dns: (id) => req("POST", `/api/profiles/${id}/dns`),
   // Auto-adjust: align the profile to what its browser actually presents.
   align: (id) => req("POST", `/api/profiles/${id}/align`),
+  // Automation: open the profile with a CDP endpoint your scripts can attach to.
+  // (Detach with stop(id) — the attached browser closes when the session ends.)
+  attach: (id) => req("POST", `/api/profiles/${id}/attach`),
   warmup: (id, minutes, preset) => req("POST", `/api/profiles/${id}/warmup`, { minutes, preset }),
   bulkUpdate: (ids, patch) => req("POST", "/api/profiles/bulk", { ids, patch }),
   // Bulk create at scale: save a chunk of generated profiles in one request.

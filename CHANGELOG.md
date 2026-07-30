@@ -5,6 +5,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Automation page** (dashboard, `POST /api/profiles/{id}/attach`): the engine
+  already spoke CDP (`persona attach`) — now the dashboard drives it. One click
+  opens a profile with a DevTools endpoint and hands back the connection details
+  with ready-to-paste **Playwright / Puppeteer / Selenium** snippets (copy
+  buttons, language tabs), so your script attaches to the *same* spoofed,
+  warmed-up window instead of launching a fresh un-spoofed one. Detach = stop.
+  Chromium engines only (cloak / patchright / playwright); the endpoint rejects
+  Firefox-based camoufox with a clear message.
 - **Fingerprint collision detector** (`persona collisions`, `collision.py`,
   `GET /api/profiles/collisions`): finds profiles that present the *same*
   fingerprint — identical WebGL, screen, hardware and user-agent read as one
