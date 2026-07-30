@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { api } from "./api";
 import {
   Layers, Globe, FolderTree, Copy, Trash2, Play, Square, Pencil,
@@ -6,7 +6,7 @@ import {
   Cpu, MonitorSmartphone, Fingerprint, Wifi, WifiOff, Check, Clipboard,
   Settings, Boxes, Activity, MapPin, Clock, Camera, Mic, Blocks,
   RefreshCw, Server, Sparkles, ArrowRight, Star, Circle,
-  Cookie, Download, Upload, Flame, Link2,
+  Cookie, Download, Upload, Flame, Link2, Sun, Moon, Command,
 } from "lucide-react";
 
 /* ================================================================== *
@@ -19,14 +19,26 @@ import {
  * ================================================================== */
 
 /* ---- design tokens: "ink violet" identity console ---------------- */
-const T = {
+const DARK = {
   bg: "#0B0B10", bg2: "#101017", surface: "#15151F", surface2: "#1C1C2A",
   line: "#282840", lineSoft: "#1E1E2E",
   text: "#ECEDF5", muted: "#989BB6", dim: "#5B5E7A",
   violet: "#8B7CFF", violetDeep: "#6D5CE8", violetDim: "#2C265221",
   lilac: "#B7ADFF", mint: "#4FE0B0", mintDim: "#123A31",
-  amber: "#F2B84B", red: "#FF6B7A", grey: "#6B6E88",
+  amber: "#F2B84B", amberDim: "rgba(240,180,80,.14)", red: "#FF6B7A", grey: "#6B6E88",
 };
+const LIGHT = {
+  bg: "#F5F5FB", bg2: "#FFFFFF", surface: "#FFFFFF", surface2: "#F0F0F8",
+  line: "#E3E3EE", lineSoft: "#EDEDF5",
+  text: "#171826", muted: "#5C5F79", dim: "#9A9DB8",
+  violet: "#6D5CE8", violetDeep: "#5A48D6", violetDim: "#ECE9FB",
+  lilac: "#6D5CE8", mint: "#12B886", mintDim: "#DCF5EC",
+  amber: "#B7860B", amberDim: "#FBEFD3", red: "#E5484D", grey: "#8A8DA6",
+};
+// A live palette the whole app reads. Switching theme mutates it in place and
+// re-renders from the root (see App), so every inline style and icon colour
+// follows along without the theme being threaded through each component.
+const T = { ...DARK };
 const FONT = {
   display: '"Space Grotesk", ui-sans-serif, system-ui, sans-serif',
   body: '"Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
@@ -200,6 +212,44 @@ function vendorFor(renderer) {
 }
 const CHROME_VERSIONS = ["125.0.0.0", "126.0.0.0", "127.0.0.0", "128.0.0.0"];
 
+/* ---- toasts ------------------------------------------------------ *
+ * A tiny module-level pub/sub so any code — even outside React — can call
+ * toast.error(msg) without the app threading a context through everything.  */
+let _toastId = 0;
+const _toastSubs = new Set();
+function _pushToast(kind, message) {
+  const t = { id: ++_toastId, kind, message: String(message) };
+  _toastSubs.forEach(fn => fn(t));
+}
+const toast = {
+  success: (m) => _pushToast("success", m),
+  error: (m) => _pushToast("error", m),
+  info: (m) => _pushToast("info", m),
+};
+
+function Toaster() {
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    const on = (t) => {
+      setItems(list => [...list, t]);
+      setTimeout(() => setItems(list => list.filter(x => x.id !== t.id)), 3800);
+    };
+    _toastSubs.add(on);
+    return () => _toastSubs.delete(on);
+  }, []);
+  const remove = (id) => setItems(list => list.filter(x => x.id !== id));
+  return (
+    <div className="ps-toaster">
+      {items.map(t => (
+        <div key={t.id} className={"ps-toast " + t.kind} onClick={() => remove(t.id)}>
+          {t.kind === "success" ? <Check size={15} /> : t.kind === "error" ? <ShieldAlert size={15} /> : <Activity size={15} />}
+          <span>{t.message}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ================================================================== */
 export default function App() {
   const [profiles, setProfiles] = useState(seed);
@@ -214,6 +264,32 @@ export default function App() {
   const [mode, setMode] = useState("connecting");   // connecting | live | demo
   const [engines, setEngines] = useState(null);      // {name: installed} from API
   const [defaultEngine, setDefaultEngine] = useState(ENGINE_ORDER[0]); // new-profile default
+  const [palette, setPalette] = useState(() => {     // "dark" | "light"
+    const t = (typeof localStorage !== "undefined" && localStorage.getItem("ps-theme")) || "dark";
+    Object.assign(T, t === "light" ? LIGHT : DARK);  // paint before children render
+    if (typeof document !== "undefined") document.documentElement.dataset.theme = t;
+    return t;
+  });
+  const [, forceRepaint] = useState(0);              // bump to re-read T after mutating it
+  const [cmdOpen, setCmdOpen] = useState(false);     // ⌘K command palette
+
+  const toggleTheme = () => {
+    const next = palette === "light" ? "dark" : "light";
+    Object.assign(T, next === "light" ? LIGHT : DARK);
+    try { localStorage.setItem("ps-theme", next); } catch { /* private mode */ }
+    if (typeof document !== "undefined") document.documentElement.dataset.theme = next;
+    setPalette(next); forceRepaint(n => n + 1);
+  };
+
+  // ⌘K / Ctrl-K opens the command palette; Esc closes it.
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setCmdOpen(o => !o); }
+      else if (e.key === "Escape") setCmdOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const live = mode === "live";
 
@@ -277,25 +353,25 @@ export default function App() {
     const p = profiles.find(x => x.id === id);
     if (live) {
       try { await (p?.status === "running" ? api.stop(id) : api.launch(id)); await refresh(); }
-      catch (e) { alert("Launch failed: " + e.message); }
+      catch (e) { toast.error("Launch failed: " + e.message); }
       return;
     }
     setProfiles(ps => ps.map(x => x.id === id ? { ...x, status: x.status === "running" ? "stopped" : "running", lastActive: "now" } : x));
   };
   const clone = async (p) => {
     const copy = { ...p, id: undefined, name: p.name + "-copy", status: "stopped", lastActive: "never", _new: true };
-    if (live) { try { await api.create(copy); await refresh(); } catch (e) { alert("Clone failed: " + e.message); } return; }
+    if (live) { try { await api.create(copy); await refresh(); } catch (e) { toast.error("Clone failed: " + e.message); } return; }
     setProfiles(ps => [...ps, { ...copy, id: nid() }]);
   };
   const remove = async (id) => {
-    if (live) { try { await api.remove(id); await refresh(); } catch (e) { alert("Delete failed: " + e.message); } return; }
+    if (live) { try { await api.remove(id); await refresh(); } catch (e) { toast.error("Delete failed: " + e.message); } return; }
     setProfiles(ps => ps.filter(p => p.id !== id));
   };
   const save = async (p) => {
     if (p.engine) setDefaultEngine(p.engine);   // "last engine wins" for the next new profile
     if (live) {
       try { const exists = profiles.some(x => x.id === p.id) && !p._new; await (exists ? api.update(p) : api.create({ ...p, id: undefined })); await refresh(); }
-      catch (e) { alert("Save failed: " + e.message); }
+      catch (e) { toast.error("Save failed: " + e.message); }
       return;
     }
     setProfiles(ps => ps.some(x => x.id === p.id) ? ps.map(x => x.id === p.id ? p : x) : [...ps, p]);
@@ -303,7 +379,7 @@ export default function App() {
 
   // Import profiles exported from GoLogin / AdsPower / Multilogin.
   const importProfiles = () => {
-    if (!live) { alert("Start the engine (persona serve) to import profiles."); return; }
+    if (!live) { toast.info("Start the engine (persona serve) to import profiles."); return; }
     const inp = document.createElement("input");
     inp.type = "file"; inp.accept = ".json,application/json";
     inp.onchange = async () => {
@@ -313,9 +389,9 @@ export default function App() {
         const res = await api.importProfiles(await f.text());
         await refresh();
         const flagged = (res.results || []).filter(r => r.issues?.length).length;
-        alert(`Imported ${res.imported} profile${res.imported === 1 ? "" : "s"}.`
+        toast.success(`Imported ${res.imported} profile${res.imported === 1 ? "" : "s"}.`
           + (flagged ? ` ${flagged} flagged for review — open them to see the coherence notes.` : ""));
-      } catch (e) { alert("Import failed: " + e.message); }
+      } catch (e) { toast.error("Import failed: " + e.message); }
     };
     inp.click();
   };
@@ -325,7 +401,7 @@ export default function App() {
 
   return (
     <div style={{ background: T.bg, color: T.text, minHeight: "100vh", fontFamily: FONT.body }}>
-      <style>{css}</style>
+      <style>{makeCss()}</style>
       <div className="ps-shell">
         {/* ---- Sidebar ---- */}
         <aside className="ps-side">
@@ -386,6 +462,10 @@ export default function App() {
             <button className="ps-btn ghost" onClick={importProfiles}><Download size={14} /> Import</button>
             <button className="ps-btn ghost" onClick={() => setBulk(true)}><Boxes size={14} /> Bulk create</button>
             <button className="ps-btn primary" onClick={() => setEditor(newProfile(folder, defaultEngine))}><Plus size={15} /> New profile</button>
+            <button className="ps-iconbtn" title="Command palette (⌘K / Ctrl-K)" onClick={() => setCmdOpen(true)}><Command size={15} /></button>
+            <button className="ps-iconbtn" title={palette === "light" ? "Switch to dark" : "Switch to light"} onClick={toggleTheme}>
+              {palette === "light" ? <Moon size={15} /> : <Sun size={15} />}
+            </button>
           </div>
 
           {view === "profiles" && (
@@ -404,7 +484,7 @@ export default function App() {
         const ids = [...sel];
         if (live) {
           try { await api.bulkUpdate(ids, patch); await refresh(); }
-          catch (e) { alert("Bulk edit failed: " + e.message); }
+          catch (e) { toast.error("Bulk edit failed: " + e.message); }
         } else {
           const { addTags, ...fields } = patch;
           setProfiles(ps => ps.map(p => !ids.includes(p.id) ? p : {
@@ -431,6 +511,10 @@ export default function App() {
             onProgress?.(list.length, list.length);
           }
         }} />}
+      {cmdOpen && <CommandPalette onClose={() => setCmdOpen(false)} profiles={profiles}
+        setView={setView} setEditor={setEditor} toggleRun={toggleRun} toggleTheme={toggleTheme}
+        newProfile={() => setEditor(newProfile(folder, defaultEngine))} />}
+      <Toaster />
     </div>
   );
 }
@@ -445,7 +529,7 @@ function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSe
   // Warm up every selected profile (live only — it opens real headless browsers).
   const warmSelected = async () => {
     const ids = [...sel];
-    if (!live) { alert("Warm-up runs against the live engine — start `persona serve` first."); return; }
+    if (!live) { toast.info("Warm-up runs against the live engine — start `persona serve` first."); return; }
     setSel(new Set());
     await Promise.all(ids.map(id => api.warmup(id, 5, "general").catch(() => {})));
     await refresh();
@@ -1292,7 +1376,7 @@ function BulkModal({ onClose, onCreate, folder, defaultEngine }) {
   const create = async () => {
     setBusy(true); setProg(0);
     try { await onCreate(build(), (done) => setProg(done)); onClose(); }
-    catch (e) { alert("Bulk create failed: " + e.message); setBusy(false); }
+    catch (e) { toast.error("Bulk create failed: " + e.message); setBusy(false); }
   };
 
   return (
@@ -1402,7 +1486,7 @@ function HealthView({ profiles, live, refresh, setEditor }) {
   const act = async (id, label, fn) => {
     setBusy(b => ({ ...b, [id]: label }));
     try { await fn(); await load(); await refresh(); }
-    catch (e) { alert(`${label} failed: ` + e.message); }
+    catch (e) { toast.error(`${label} failed: ` + e.message); }
     setBusy(b => { const n = { ...b }; delete n[id]; return n; });
   };
 
@@ -1535,7 +1619,7 @@ function ProxiesView({ profiles, live, refresh }) {
   const testOne = async (id) => {
     setTesting(s => new Set(s).add(id));
     try { await api.testProxy(id); await load(); }
-    catch (e) { alert("Test failed: " + e.message); }
+    catch (e) { toast.error("Test failed: " + e.message); }
     setTesting(s => { const n = new Set(s); n.delete(id); return n; });
   };
   const testAll = async () => {
@@ -1543,13 +1627,13 @@ function ProxiesView({ profiles, live, refresh }) {
     for (const p of pool) { try { await api.testProxy(p.id); } catch { /* keep going */ } }
     await load(); setBusy("");
   };
-  const del = async (id) => { try { await api.deleteProxy(id); await load(); } catch (e) { alert(e.message); } };
+  const del = async (id) => { try { await api.deleteProxy(id); await load(); } catch (e) { toast.error(e.message); } };
   const assign = async () => {
     if (!pool.length) return;
     if (!confirm(`Assign these ${pool.length} proxies round-robin across all ${profiles.length} profiles? Each profile's locale/timezone will align to its proxy's country.`)) return;
     setBusy("assign");
-    try { const r = await api.assignProxies(); alert(`Assigned proxies to ${r.assigned} profile(s).`); await refresh(); }
-    catch (e) { alert("Assign failed: " + e.message); }
+    try { const r = await api.assignProxies(); toast.success(`Assigned proxies to ${r.assigned} profile(s).`); await refresh(); }
+    catch (e) { toast.error("Assign failed: " + e.message); }
     setBusy("");
   };
 
@@ -1612,8 +1696,8 @@ function ImportProxiesModal({ onClose, onImport }) {
   const lines = text.split("\n").filter(l => l.trim() && !l.trim().startsWith("#")).length;
   const submit = async () => {
     setBusy(true);
-    try { const r = await onImport(text); alert(`Added ${r.added} proxy(ies). Pool now has ${r.total}.`); onClose(); }
-    catch (e) { alert("Import failed: " + e.message); setBusy(false); }
+    try { const r = await onImport(text); toast.success(`Added ${r.added} proxy(ies). Pool now has ${r.total}.`); onClose(); }
+    catch (e) { toast.error("Import failed: " + e.message); setBusy(false); }
   };
   return (
     <div className="ps-overlay center" onClick={busy ? undefined : onClose}>
@@ -1661,6 +1745,7 @@ function AutomationView({ profiles, live, refresh }) {
   const [busy, setBusy] = useState("");
   const [lang, setLang] = useState("Playwright");
   const [copied, setCopied] = useState("");
+  const [headless, setHeadless] = useState(false);
   const CHROMIUM = ["cloak", "patchright", "playwright"];
 
   const copy = (text, key) => {
@@ -1669,14 +1754,18 @@ function AutomationView({ profiles, live, refresh }) {
   };
   const attach = async (id) => {
     setBusy(id);
-    try { const r = await api.attach(id); setInfo(m => ({ ...m, [id]: r })); await refresh(); }
-    catch (e) { alert("Attach failed: " + e.message); }
+    try {
+      const r = await api.attach(id, headless);
+      setInfo(m => ({ ...m, [id]: r }));
+      toast.success(`Attached on :${r.port}${r.headless ? " (headless)" : ""}`);
+      await refresh();
+    } catch (e) { toast.error("Attach failed: " + e.message); }
     setBusy("");
   };
   const detach = async (id) => {
     setBusy(id);
     try { await api.stop(id); setInfo(m => { const n = { ...m }; delete n[id]; return n; }); await refresh(); }
-    catch (e) { alert("Detach failed: " + e.message); }
+    catch (e) { toast.error("Detach failed: " + e.message); }
     setBusy("");
   };
 
@@ -1706,6 +1795,10 @@ function AutomationView({ profiles, live, refresh }) {
   return (
     <div className="ps-scroll">
       {intro}
+      <label className="ps-hcheck">
+        <input type="checkbox" checked={headless} onChange={e => setHeadless(e.target.checked)} />
+        <span>Headless — attach without a visible window (for servers / CI)</span>
+      </label>
       {profiles.length === 0
         ? <div className="ps-empty"><Zap size={26} color={T.dim} /><div>No profiles to attach yet.</div></div>
         : (
@@ -1769,6 +1862,73 @@ function AutomationView({ profiles, live, refresh }) {
   );
 }
 
+/* ---- Command palette (⌘K) ---------------------------------------- */
+function CommandPalette({ onClose, profiles, setView, setEditor, toggleRun, toggleTheme, newProfile }) {
+  const [q, setQ] = useState("");
+  const [sel, setSel] = useState(0);
+  const inputRef = useRef(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const cmds = useMemo(() => {
+    const nav = [
+      ["Go to Profiles", () => setView("profiles"), Layers],
+      ["Go to Health", () => setView("health"), Activity],
+      ["Go to Engines", () => setView("engines"), Blocks],
+      ["Go to Proxies", () => setView("proxies"), Globe],
+      ["Go to Automation", () => setView("automation"), Zap],
+      ["Go to Settings", () => setView("settings"), Settings],
+    ].map(([label, run, Ic]) => ({ label, run, Ic, group: "Navigate" }));
+    const actions = [
+      ["New profile", () => newProfile(), Plus],
+      ["Toggle light / dark theme", () => toggleTheme(), Sun],
+    ].map(([label, run, Ic]) => ({ label, run, Ic, group: "Action" }));
+    // Cap the per-profile commands so a 10k list doesn't build 20k entries.
+    const profs = profiles.slice(0, 150).flatMap(p => ([
+      { label: `Open ${p.name}`, run: () => setEditor(p), Ic: Pencil, group: "Profile" },
+      { label: `${p.status === "running" ? "Stop" : "Launch"} ${p.name}`, run: () => toggleRun(p.id),
+        Ic: p.status === "running" ? Square : Play, group: "Profile" },
+    ]));
+    return [...nav, ...actions, ...profs];
+  }, [profiles]);
+
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    return (s ? cmds.filter(c => c.label.toLowerCase().includes(s)) : cmds).slice(0, 40);
+  }, [q, cmds]);
+  useEffect(() => { setSel(0); }, [q]);
+
+  const runAt = (i) => { const c = filtered[i]; if (c) { c.run(); onClose(); } };
+  const onKey = (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setSel(s => Math.min(s + 1, filtered.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setSel(s => Math.max(s - 1, 0)); }
+    else if (e.key === "Enter") { e.preventDefault(); runAt(sel); }
+  };
+
+  return (
+    <div className="ps-cmd-scrim" onClick={onClose}>
+      <div className="ps-cmd" onClick={e => e.stopPropagation()}>
+        <div className="ps-cmd-in">
+          <Search size={16} color={T.dim} />
+          <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} onKeyDown={onKey}
+            placeholder="Search commands and profiles…" />
+          <kbd className="ps-kbd">esc</kbd>
+        </div>
+        <div className="ps-cmd-list">
+          {filtered.length === 0 && <div className="ps-cmd-empty">No matches</div>}
+          {filtered.map((c, i) => (
+            <button key={i} className={"ps-cmd-item" + (i === sel ? " on" : "")}
+              onMouseEnter={() => setSel(i)} onClick={() => runAt(i)}>
+              <c.Ic size={15} />
+              <span style={{ flex: 1, textAlign: "left" }}>{c.label}</span>
+              <span className="ps-cmd-group">{c.group}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Placeholder({ view }) {
   const map = {
     folders: [FolderTree, "Folder manager", "Organize profiles into folders and drag between them."],
@@ -1802,7 +1962,9 @@ const Pick = ({ label, opts, val, on }) => (
 );
 
 /* ---- styles ------------------------------------------------------ */
-const css = `
+// A function (not a const string) so it re-reads the live palette T on every
+// render — that's what makes the light/dark toggle repaint the whole stylesheet.
+const makeCss = () => `
 * { box-sizing: border-box; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: ${T.line}; border-radius: 6px; }
@@ -1901,6 +2063,30 @@ a { color: inherit; }
 .ps-copy { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-family: ${FONT.mono}; color: ${T.lilac}; background: ${T.violetDim}; border: 1px solid ${T.line}; border-radius: 6px; padding: 3px 9px; cursor: pointer; transition: color .15s, border-color .15s; }
 .ps-copy:hover { color: ${T.text}; border-color: ${T.violet}; }
 .ps-copy.floaty { position: absolute; top: 8px; right: 8px; }
+.ps-hcheck { display: inline-flex; align-items: center; gap: 8px; margin: 12px 0 2px; font-size: 12px; color: ${T.muted}; cursor: pointer; }
+
+.ps-iconbtn { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 9px; border: 1px solid ${T.line}; background: ${T.surface}; color: ${T.muted}; cursor: pointer; transition: color .15s, border-color .15s; }
+.ps-iconbtn:hover { color: ${T.text}; border-color: ${T.violet}; }
+
+.ps-toaster { position: fixed; top: 18px; right: 18px; display: flex; flex-direction: column; gap: 10px; z-index: 1000; }
+.ps-toast { display: flex; align-items: center; gap: 10px; min-width: 240px; max-width: 380px; padding: 11px 14px; border-radius: 10px; font-size: 13px; font-weight: 500; color: ${T.text}; background: ${T.surface2}; border: 1px solid ${T.line}; box-shadow: 0 10px 30px rgba(0,0,0,.35); cursor: pointer; animation: toastIn .22s ease; }
+.ps-toast.success { border-left: 3px solid ${T.mint}; } .ps-toast.success svg { color: ${T.mint}; }
+.ps-toast.error { border-left: 3px solid ${T.red}; } .ps-toast.error svg { color: ${T.red}; }
+.ps-toast.info { border-left: 3px solid ${T.violet}; } .ps-toast.info svg { color: ${T.lilac}; }
+@keyframes toastIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
+
+.ps-cmd-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.5); backdrop-filter: blur(2px); display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; z-index: 1100; animation: cmdFade .12s ease; }
+@keyframes cmdFade { from { opacity: 0; } to { opacity: 1; } }
+.ps-cmd { width: min(560px, 92vw); background: ${T.bg2}; border: 1px solid ${T.line}; border-radius: 14px; box-shadow: 0 24px 70px rgba(0,0,0,.5); overflow: hidden; }
+.ps-cmd-in { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid ${T.line}; }
+.ps-cmd-in input { flex: 1; background: none; border: none; outline: none; color: ${T.text}; font-size: 15px; font-family: ${FONT.body}; }
+.ps-kbd { font-size: 10px; font-family: ${FONT.mono}; color: ${T.dim}; border: 1px solid ${T.line}; border-radius: 5px; padding: 2px 6px; }
+.ps-cmd-list { max-height: 46vh; overflow-y: auto; padding: 6px; }
+.ps-cmd-item { display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 12px; border: none; background: none; color: ${T.muted}; font-size: 13px; border-radius: 8px; cursor: pointer; text-align: left; }
+.ps-cmd-item.on { background: ${T.surface2}; color: ${T.text}; }
+.ps-cmd-item.on svg { color: ${T.violet}; }
+.ps-cmd-group { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: ${T.dim}; }
+.ps-cmd-empty { padding: 24px; text-align: center; color: ${T.dim}; font-size: 13px; }
 .ps-env { display: flex; align-items: center; gap: 8px; }
 .ps-os { font-size: 11px; font-weight: 600; color: ${T.lilac}; background: ${T.violetDim}; padding: 2px 8px; border-radius: 6px; }
 .ps-engine-chip { font-size: 11px; font-weight: 500; color: ${T.muted}; background: ${T.surface}; border: 1px solid ${T.line}; padding: 3px 9px; border-radius: 6px; }

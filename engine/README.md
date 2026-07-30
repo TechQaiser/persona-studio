@@ -227,7 +227,7 @@ dashboard uses to manage and launch profiles for real. It listens on
 | POST | `/api/profiles/{id}/tls` | TLS/JA3/JA4 handshake fingerprint |
 | POST | `/api/profiles/{id}/dns` | DNS leak check — which resolvers see the lookups |
 | POST | `/api/profiles/{id}/warmup` | Start a background warm-up (`minutes`, `preset`) |
-| POST | `/api/profiles/{id}/attach` | Open with a CDP endpoint; returns `port`, `wsUrl`, snippets |
+| POST | `/api/profiles/{id}/attach` | Open with a CDP endpoint (optional `{headless}`); returns `port`, `wsUrl`, snippets |
 | GET | `/api/profiles/health` | One row per profile: coherence, proxy, cached trust, schedule |
 | GET | `/api/profiles/collisions` | Groups of profiles that share a fingerprint |
 | POST | `/api/profiles/bulk` | Apply one `patch` to many `ids` |

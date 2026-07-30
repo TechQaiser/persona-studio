@@ -54,7 +54,7 @@ export const api = {
   align: (id) => req("POST", `/api/profiles/${id}/align`),
   // Automation: open the profile with a CDP endpoint your scripts can attach to.
   // (Detach with stop(id) — the attached browser closes when the session ends.)
-  attach: (id) => req("POST", `/api/profiles/${id}/attach`),
+  attach: (id, headless) => req("POST", `/api/profiles/${id}/attach`, { headless }),
   warmup: (id, minutes, preset) => req("POST", `/api/profiles/${id}/warmup`, { minutes, preset }),
   bulkUpdate: (ids, patch) => req("POST", "/api/profiles/bulk", { ids, patch }),
   // Bulk create at scale: save a chunk of generated profiles in one request.

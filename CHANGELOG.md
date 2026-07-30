@@ -5,6 +5,24 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Command palette** (dashboard, ⌘K / Ctrl-K): fuzzy-search across views,
+  actions (new profile, toggle theme) and every profile (open / launch / stop),
+  driven entirely from the keyboard (↑/↓/Enter, Esc to close).
+- **Light / dark theme** (dashboard): a Sun/Moon toggle in the top bar switches
+  the whole app between a new light theme and the original dark one; the choice
+  is remembered in `localStorage`. The palette repaints inline styles, icons and
+  the full stylesheet in one pass.
+- **Toast notifications** (dashboard): success / error / info actions now surface
+  as stacked, auto-dismissing toasts instead of blocking `alert()` popups.
+- **Headless attach** (`persona attach --headless`, `POST …/attach {headless}`):
+  attach a profile's DevTools endpoint without opening a visible window — for
+  servers and CI. Exposed as a checkbox on the Automation page.
+
+### Changed
+- Automation attach now reports success as a toast (with the port and whether it
+  came up headless).
+
+### Added (earlier this cycle)
 - **Automation page** (dashboard, `POST /api/profiles/{id}/attach`): the engine
   already spoke CDP (`persona attach`) — now the dashboard drives it. One click
   opens a profile with a DevTools endpoint and hands back the connection details

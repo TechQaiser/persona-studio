@@ -553,7 +553,8 @@ def cmd_attach(args, store: ProfileStore) -> int:
         return 1
     from .automation import attach, snippets
     print(_c(f"Launching '{prof.name}' with DevTools on port {args.port}...", C.CYN))
-    (pw, context, page), info = attach(prof, store, port=args.port, engine=args.engine)
+    (pw, context, page), info = attach(prof, store, port=args.port, engine=args.engine,
+                                       headless=args.headless)
     ws = info.get("webSocketDebuggerUrl", "")
     print(_c(f"\n  {info.get('Browser', 'Browser')} ready — attach your automation:", C.B))
     print(snippets(args.port, ws))
@@ -964,6 +965,8 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("ref")
     c.add_argument("--port", type=int, default=9222, help="DevTools port (default: 9222)")
     c.add_argument("--engine")
+    c.add_argument("--headless", action="store_true",
+                   help="Attach without a visible window (for servers/CI)")
     c.set_defaults(func=cmd_attach)
 
     c = sub.add_parser("ext", help="Manage a profile's browser extensions")

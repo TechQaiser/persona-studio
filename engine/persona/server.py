@@ -562,14 +562,15 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
             return s.getsockname()[1]
 
     @app.post("/api/profiles/{pid}/attach")
-    def attach_profile(pid: str):
+    def attach_profile(pid: str, body: Optional[dict] = None):
         """Open the profile with a Chrome DevTools endpoint your own automation
         can drive, and return the connection details.
 
         The browser stays open — attached and 'running' — until it's stopped
         (POST /stop), exactly like a launch. The attach itself runs as a
         subprocess that owns the window; we read the DevTools endpoint's own
-        /json/version over HTTP to hand back the WebSocket URL."""
+        /json/version over HTTP to hand back the WebSocket URL. Pass
+        ``{"headless": true}`` to attach without a visible window."""
         from .automation import CHROMIUM_ENGINES, cdp_info, snippets
         d = dash.get(pid)
         if not d:
@@ -585,10 +586,11 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
                                      f"to — use one of: {', '.join(CHROMIUM_ENGINES)}")
         engine_store.save(to_engine_profile(d))
         port = _free_port()
-        running[pid] = subprocess.Popen(
-            [sys.executable, "-m", "persona", "--data-dir", str(engine_store.root),
-             "attach", pid, "--port", str(port)],
-        )
+        cli = [sys.executable, "-m", "persona", "--data-dir", str(engine_store.root),
+               "attach", pid, "--port", str(port)]
+        if (body or {}).get("headless"):
+            cli.append("--headless")
+        running[pid] = subprocess.Popen(cli)
         try:
             info = cdp_info(port)            # waits for DevTools to answer
         except RuntimeError as e:
@@ -596,6 +598,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
             raise HTTPException(500, str(e))
         ws = info.get("webSocketDebuggerUrl", "")
         result = {"pid": pid, "port": port, "wsUrl": ws,
+                  "headless": bool((body or {}).get("headless")),
                   "browser": info.get("Browser", ""), "snippets": snippets(port, ws)}
         attached[pid] = result
         return result
