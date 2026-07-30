@@ -770,6 +770,22 @@ def align_to_reality(profile: Profile, store: ProfileStore,
         fp.languages = list(seen["languages"])
         changed.append("languages")
 
+    # 3b. Timezone + locale: match the machine's real clock. An engine that shows
+    #     the host timezone (e.g. CloakBrowser) otherwise fails the "timezone
+    #     matches" check forever, capping auto-adjust at B. We only move it when a
+    #     locale whose canonical zone is that timezone exists, so the profile stays
+    #     coherent (locale still implies its timezone).
+    tz = seen.get("timezone")
+    if tz:
+        loc = next((l for l, (z, _lg) in _devices.LOCALES.items() if z == tz), None)
+        if loc:
+            if fp.timezone != tz:
+                fp.timezone = tz
+                changed.append("timezone")
+            if fp.locale != loc:
+                fp.locale = loc
+                changed.append("locale")
+
     # 4. Fonts: keep this OS's fonts that actually render here (a real subset),
     #    falling back to the full OS set if the probe came back empty.
     rendered = set(seen.get("fontsRendered") or [])

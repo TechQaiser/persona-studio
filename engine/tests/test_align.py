@@ -6,7 +6,7 @@ grades clean — is pure. We stub the observation and pin that logic, which is t
 part that would silently do the wrong thing if it broke.
 """
 
-from persona import generate, validate
+from persona import generate, validate, devices
 from persona.models import Profile
 from persona.store import ProfileStore
 from persona.probe import (
@@ -114,3 +114,55 @@ def test_align_is_a_noop_when_already_matching(tmp_path, monkeypatch):
     res = align_to_reality(prof, store, engine="playwright")
     assert res["changed"] == []
     assert res["after"]["score"] == 100
+
+
+def _fully_consistent_windows_seen(tz):
+    """An observation where every check would pass — so the only thing keeping
+    the grade below A is whether align picks up the timezone."""
+    return {
+        "webdriver": False, "webdriverOwn": False, "hasChrome": True, "plugins": 3,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "platform": devices.NAV_PLATFORM["windows"], "languages": ["en-US", "en"],
+        "cores": 8, "memory": 8, "timezone": tz,
+        "toStringNative": True, "permissionsAgree": True,
+        "canvasStable": True, "canvasEmpty": False,
+        "webglVendor": "Google Inc. (NVIDIA)",
+        "webglRenderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+        "screenW": 1920, "screenH": 1080,
+        "fontsRendered": [devices.FONTS["windows"][0]],
+        "cameras": 1, "microphones": 1,
+    }
+
+
+def test_align_moves_timezone_and_locale_to_reality(tmp_path, monkeypatch):
+    # A US profile (America/New_York) on a machine whose real clock is Karachi —
+    # the case where auto-adjust used to stop at B because the timezone check
+    # stayed failed. Now align should follow the clock and reach A.
+    store = ProfileStore(tmp_path)
+    prof = Profile(name="flow", engine="cloak",
+                   fingerprint=generate(seed=1, os="windows", locale="en-US"))
+    store.save(prof)
+    monkeypatch.setattr(probe, "_observe", lambda *a, **k: _fully_consistent_windows_seen("Asia/Karachi"))
+
+    res = align_to_reality(prof, store, engine="cloak")
+
+    assert prof.fingerprint.timezone == "Asia/Karachi"
+    assert prof.fingerprint.locale == "en-PK"       # the coherent locale for that zone
+    assert "timezone" in res["changed"]
+    assert res["after"]["grade"] == "A" and res["after"]["score"] == 100
+    assert validate(prof.fingerprint) == []          # still coherent
+
+
+def test_align_keeps_timezone_when_no_locale_models_it(tmp_path, monkeypatch):
+    # A zone Persona doesn't model: leave it alone rather than break coherence.
+    store = ProfileStore(tmp_path)
+    prof = Profile(name="flow", engine="cloak",
+                   fingerprint=generate(seed=1, os="windows", locale="en-US"))
+    store.save(prof)
+    monkeypatch.setattr(probe, "_observe", lambda *a, **k: _fully_consistent_windows_seen("Antarctica/Troll"))
+
+    res = align_to_reality(prof, store, engine="cloak")
+
+    assert prof.fingerprint.timezone == devices.LOCALES["en-US"][0]   # unchanged
+    assert "timezone" not in res["changed"]

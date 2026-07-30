@@ -206,8 +206,13 @@ def validate(fp: Fingerprint) -> list[str]:
         # navigator.languages varies with the user's settings (one entry or
         # several), so we require the *primary* language to agree with the
         # locale rather than an exact list — a machine-aligned profile that
-        # reports just ["en-US"] is as coherent as ["en-US", "en"].
-        if not fp.languages or fp.languages[0] != langs[0]:
+        # reports just ["en-US"] is as coherent as ["en-US", "en"]. We compare
+        # the base language (en), not the region (en-US vs en-PK): an English
+        # browser in a Karachi timezone is a real, coherent user, and matching
+        # on region would wrongly flag it.
+        def _base(tag):
+            return (tag or "").split("-")[0].lower()
+        if not fp.languages or _base(fp.languages[0]) != _base(langs[0]):
             issues.append("languages do not match locale")
     else:
         issues.append(f"unknown locale '{fp.locale}'")

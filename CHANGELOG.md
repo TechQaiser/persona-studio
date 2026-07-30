@@ -18,6 +18,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   attach a profile's DevTools endpoint without opening a visible window — for
   servers and CI. Exposed as a checkbox on the Automation page.
 
+### Fixed
+- **Auto-adjust capped at grade B** — `align` matched everything to the browser
+  *except the timezone*, so on an engine that shows the host clock (e.g.
+  CloakBrowser) the "timezone matches" check stayed failed forever, holding the
+  grade at B (15/16). Align now follows the machine's real timezone and moves
+  the locale to the coherent one for that zone (e.g. `Asia/Karachi` → `en-PK`),
+  so a fully-aligned profile can reach A. Only moves the timezone when a locale
+  models it, so coherence never regresses.
+- Coherence's language check now compares the **base** language (`en`), not the
+  region (`en-US` vs `en-PK`): an English browser in a Karachi timezone is a
+  real, coherent user and shouldn't be flagged. A genuine mismatch (`de` vs
+  `en`) is still caught.
+
 ### Changed
 - Automation attach now reports success as a toast (with the port and whether it
   came up headless).
