@@ -40,6 +40,22 @@ parts all agree — and a live coherence check that proves it, both in the engin
 That coherence-first design is the thing commercial tools don't surface, and it's
 what makes Persona distinctive.
 
+## Persona vs the commercial tools
+
+|  | **Persona** | Multilogin | GoLogin | AdsPower |
+|---|:---:|:---:|:---:|:---:|
+| **Price** | **Free** | from ~$99/mo | from ~$49/mo | free tier + paid |
+| **Open source** | ✅ MIT | ❌ | ❌ | ❌ |
+| **Self-hosted — data never leaves your machine** | ✅ | ❌ cloud | ❌ cloud | ❌ cloud |
+| **Live coherence meter** (proves the fingerprint agrees with itself) | ✅ | ❌ | ❌ | ❌ |
+| **Trust checker** — grades the *real* browser, not the config | ✅ | ❌ | ❌ | ❌ |
+| **Patched-binary stealth engine** | ✅ Cloak / Camoufox | ✅ | ⚠️ | ✅ |
+| **Proxy pool + leak/DNS/TLS tests** | ✅ | partial | partial | partial |
+| **CLI + Python API** | ✅ | ❌ | limited | limited |
+| **Cloud team sync** | ❌ *(local-first by design)* | ✅ | ✅ | ✅ |
+
+<sub>Pricing and feature comparison are approximate and based on each vendor's public plans at the time of writing — check their sites for current details. Persona doesn't do hosted team sync on purpose (see the roadmap); everything else is local and free.</sub>
+
 ## What's in the box
 
 Persona is a monorepo with two parts that work together:

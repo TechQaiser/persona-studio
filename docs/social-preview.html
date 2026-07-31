@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Persona — social preview</title>
+<style>
+  /* GitHub social preview is 1280×640. Open this file, screenshot the card
+     (it's exactly that size), and upload at Settings → General → Social preview. */
+  :root {
+    --ink:      #0b0f17;
+    --ink-2:    #111725;
+    --line:     #1f2836;
+    --text:     #e8edf5;
+    --muted:    #8a97ab;
+    --amber:    #f5b53d;
+    --green:    #3ddc84;
+    --blue:     #61dafb;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    background: #05070c;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  .card {
+    width: 1280px; height: 640px; position: relative; overflow: hidden;
+    background:
+      radial-gradient(1100px 500px at 78% -10%, rgba(245,181,61,.14), transparent 60%),
+      radial-gradient(900px 600px at 8% 120%, rgba(97,218,251,.10), transparent 55%),
+      linear-gradient(160deg, var(--ink) 0%, var(--ink-2) 100%);
+    color: var(--text);
+    padding: 74px 80px;
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  /* faint grid texture */
+  .card::before {
+    content: ""; position: absolute; inset: 0; opacity: .35;
+    background-image:
+      linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(700px 400px at 30% 40%, #000, transparent 80%);
+  }
+  .top { position: relative; z-index: 1; }
+  .brandrow { display: flex; align-items: center; gap: 18px; margin-bottom: 30px; }
+  .logo {
+    width: 60px; height: 60px; border-radius: 15px; flex: none;
+    background: linear-gradient(145deg, var(--amber), #e0952a);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 8px 30px rgba(245,181,61,.35);
+  }
+  .logo svg { width: 34px; height: 34px; }
+  .brand { font-size: 40px; font-weight: 800; letter-spacing: -.5px; }
+  .beta {
+    font-size: 15px; font-weight: 700; color: var(--amber);
+    border: 1.5px solid rgba(245,181,61,.4); border-radius: 999px;
+    padding: 4px 14px; margin-left: 4px; letter-spacing: .5px;
+  }
+  h1 {
+    font-size: 66px; line-height: 1.04; font-weight: 800; letter-spacing: -1.5px;
+    max-width: 900px;
+  }
+  h1 .hl { color: var(--amber); }
+  .sub {
+    margin-top: 26px; font-size: 27px; line-height: 1.4; color: var(--muted);
+    max-width: 880px; font-weight: 500;
+  }
+  .sub b { color: var(--text); font-weight: 700; }
+  .bottom { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; }
+  .pills { display: flex; gap: 14px; }
+  .pill {
+    display: flex; align-items: center; gap: 9px;
+    font-size: 21px; font-weight: 700; color: var(--text);
+    background: rgba(255,255,255,.04); border: 1.5px solid var(--line);
+    border-radius: 12px; padding: 12px 20px;
+  }
+  .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .repo { font-size: 22px; color: var(--muted); font-weight: 600; }
+  .repo b { color: var(--text); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="top">
+      <div class="brandrow">
+        <div class="logo">
+          <!-- fingerprint mark -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="#0b0f17" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 12C2 6.5 6.5 2 12 2a10 10 0 0 1 8 4"/>
+            <path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2"/>
+            <path d="M17.29 21.02c.12-.6.43-2.3.5-3.02"/>
+            <path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/>
+            <path d="M8.65 22c.21-.66.45-1.32.57-2"/>
+            <path d="M14 13.12c0 2.38 0 6.38-1 8.88"/>
+            <path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354 0-6"/>
+            <path d="M9 6.8a6 6 0 0 1 9 5.2v2"/>
+          </svg>
+        </div>
+        <div class="brand">Persona</div>
+        <div class="beta">OPEN SOURCE</div>
+      </div>
+      <h1>The self-hosted<br><span class="hl">anti-detect browser</span></h1>
+      <p class="sub">Coherent fingerprints, per-profile proxies &amp; sessions —
+        a <b>free, local</b> alternative to Multilogin, GoLogin &amp; AdsPower.</p>
+    </div>
+    <div class="bottom">
+      <div class="pills">
+        <span class="pill"><span class="dot" style="background:var(--green)"></span>Free &amp; MIT</span>
+        <span class="pill"><span class="dot" style="background:var(--amber)"></span>Live coherence meter</span>
+        <span class="pill"><span class="dot" style="background:var(--blue)"></span>Python + React</span>
+      </div>
+      <div class="repo">github.com/<b>TechQaiser/persona-studio</b></div>
+    </div>
+  </div>
+</body>
+</html>
