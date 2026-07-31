@@ -7,6 +7,7 @@ import {
   Settings, Boxes, Activity, MapPin, Clock, Camera, Mic, Blocks,
   RefreshCw, Server, Sparkles, ArrowRight, Star, Circle,
   Cookie, Download, Upload, Flame, Link2, Sun, Moon, Command,
+  HardDrive, FolderPlus, Palette, Info,
 } from "lucide-react";
 
 /* ================================================================== *
@@ -264,6 +265,8 @@ export default function App() {
   const [mode, setMode] = useState("connecting");   // connecting | live | demo
   const [engines, setEngines] = useState(null);      // {name: installed} from API
   const [defaultEngine, setDefaultEngine] = useState(ENGINE_ORDER[0]); // new-profile default
+  const [config, setConfig] = useState(null);        // {root, version, ...} from API
+  const [folders, setFolders] = useState(() => FOLDERS.filter(f => f !== "All profiles"));
   const [palette, setPalette] = useState(() => {     // "dark" | "light"
     const t = (typeof localStorage !== "undefined" && localStorage.getItem("ps-theme")) || "dark";
     Object.assign(T, t === "light" ? LIGHT : DARK);  // paint before children render
@@ -303,7 +306,12 @@ export default function App() {
         try {
           await refresh();
           try { setEngines(await api.engines()); } catch { /* optional */ }
-          try { const cfg = await api.getConfig(); if (cfg?.default_engine) setDefaultEngine(cfg.default_engine); } catch { /* optional */ }
+          try {
+            const cfg = await api.getConfig();
+            setConfig(cfg);
+            if (cfg?.default_engine) setDefaultEngine(cfg.default_engine);
+            if (Array.isArray(cfg?.folders) && cfg.folders.length) setFolders(cfg.folders);
+          } catch { /* optional */ }
           setMode("live");
         } catch { setMode("demo"); }
       } else { setMode("demo"); }
@@ -342,6 +350,12 @@ export default function App() {
     () => [...new Set(profiles.flatMap(p => p.tags || []))].sort(),
     [profiles]);
 
+  // Folders shown everywhere: the persisted/created ones, plus any a profile
+  // currently lives in (so an imported "Unfiled" bucket appears on its own).
+  const folderList = useMemo(
+    () => [...new Set([...folders, ...profiles.map(p => p.folder).filter(Boolean)])],
+    [folders, profiles]);
+
   // Memoised so a 10k-profile list isn't re-scanned on every render / poll tick.
   const { running, proxyCount, coherentCount } = useMemo(() => ({
     running: profiles.filter(p => p.status === "running").length,
@@ -375,6 +389,38 @@ export default function App() {
       return;
     }
     setProfiles(ps => ps.some(x => x.id === p.id) ? ps.map(x => x.id === p.id ? p : x) : [...ps, p]);
+  };
+
+  // ---- folder management (used by the Folders tab) ----
+  const createFolder = async (name) => {
+    name = (name || "").trim();
+    if (!name || folderList.includes(name)) { if (name) toast.info(`Folder "${name}" already exists.`); return; }
+    setFolders(f => [...f, name]);
+    if (live) { try { await api.createFolder(name); } catch (e) { toast.error("Create folder failed: " + e.message); } }
+    else toast.success(`Folder "${name}" created.`);
+  };
+  const renameFolder = async (from, to) => {
+    to = (to || "").trim();
+    if (!to || to === from) return;
+    if (folderList.includes(to)) { toast.info(`Folder "${to}" already exists.`); return; }
+    setFolders(f => f.map(x => x === from ? to : x));
+    setProfiles(ps => ps.map(p => p.folder === from ? { ...p, folder: to } : p));
+    if (folder === from) setFolder(to);
+    if (live) { try { const r = await api.renameFolder(from, to); if (r?.folders) setFolders(r.folders); await refresh(); } catch (e) { toast.error("Rename failed: " + e.message); } }
+  };
+  const deleteFolder = async (name) => {
+    setFolders(f => f.filter(x => x !== name));
+    setProfiles(ps => ps.map(p => p.folder === name ? { ...p, folder: "Unfiled" } : p));
+    if (folder === name) setFolder("All profiles");
+    if (live) { try { const r = await api.deleteFolder(name); if (r?.folders) setFolders(r.folders); await refresh(); } catch (e) { toast.error("Delete folder failed: " + e.message); } }
+    else toast.success(`Folder "${name}" removed — its profiles moved to Unfiled.`);
+  };
+
+  // Change the engine used for every new profile (Settings tab).
+  const changeDefaultEngine = async (name) => {
+    setDefaultEngine(name);
+    if (live) { try { await api.setDefaultEngine(name); toast.success(`New profiles will use ${ENGINE_META[name]?.label || name}.`); } catch (e) { toast.error("Couldn't save default engine: " + e.message); } }
+    else toast.info("Connect the engine (persona serve) to save this setting.");
   };
 
   // Import profiles exported from GoLogin / AdsPower / Multilogin.
@@ -432,8 +478,11 @@ export default function App() {
           </nav>
 
           <div className="ps-folders">
-            <div className="ps-folders-h">Folders</div>
-            {FOLDERS.map(f => (
+            <div className="ps-folders-h">
+              <span style={{ flex: 1 }}>Folders</span>
+              <button className="ps-folders-manage" title="Manage folders" onClick={() => setView("folders")}>Manage</button>
+            </div>
+            {["All profiles", ...folderList].map(f => (
               <button key={f} onClick={() => { setView("profiles"); setFolder(f); }}
                 className={"ps-folder" + (folder === f && view === "profiles" ? " active" : "")}>
                 <FolderTree size={13} />
@@ -475,12 +524,23 @@ export default function App() {
           {view === "engines" && <EnginesView engines={engines} live={live} />}
           {view === "proxies" && <ProxiesView profiles={profiles} live={live} refresh={refresh} />}
           {view === "automation" && <AutomationView profiles={profiles} live={live} refresh={refresh} />}
-          {!["profiles", "health", "engines", "proxies", "automation"].includes(view) && <Placeholder view={view} />}
+          {view === "folders" && (
+            <FoldersView folders={folderList} profiles={profiles}
+              onOpen={(f) => { setFolder(f); setView("profiles"); }}
+              onCreate={createFolder} onRename={renameFolder} onDelete={deleteFolder} />
+          )}
+          {view === "settings" && (
+            <SettingsView live={live} config={config} engines={engines}
+              defaultEngine={defaultEngine} onChangeEngine={changeDefaultEngine}
+              palette={palette} toggleTheme={toggleTheme}
+              counts={{ profiles: profiles.length, folders: folderList.length, proxies: proxyCount }} />
+          )}
+          {!["profiles", "health", "engines", "proxies", "automation", "folders", "settings"].includes(view) && <Placeholder view={view} />}
         </main>
       </div>
 
-      {editor && <Editor profile={editor} live={live} onClose={() => setEditor(null)} onSave={(p) => { save(p); setEditor(null); }} />}
-      {sync && <SyncModal ids={[...sel]} onClose={() => setSync(false)} onApply={async (patch) => {
+      {editor && <Editor profile={editor} live={live} folders={folderList} onClose={() => setEditor(null)} onSave={(p) => { save(p); setEditor(null); }} />}
+      {sync && <SyncModal ids={[...sel]} folders={folderList} onClose={() => setSync(false)} onApply={async (patch) => {
         const ids = [...sel];
         if (live) {
           try { await api.bulkUpdate(ids, patch); await refresh(); }
@@ -900,7 +960,7 @@ function ProbePanel({ probe, kind }) {
 }
 
 /* ---- Fingerprint editor ------------------------------------------ */
-function Editor({ profile, live, onClose, onSave }) {
+function Editor({ profile, live, folders = [], onClose, onSave }) {
   const [p, setP] = useState(profile);
   const [tab, setTab] = useState("general");
   const set = (patch) => setP(x => ({ ...x, ...patch }));
@@ -1032,7 +1092,7 @@ function Editor({ profile, live, onClose, onSave }) {
               <Row>
                 <Field label="Folder">
                   <select className="ps-in" value={p.folder} onChange={e => set({ folder: e.target.value })}>
-                    {FOLDERS.filter(f => f !== "All profiles").map(f => <option key={f}>{f}</option>)}
+                    {[...new Set([p.folder, ...folders].filter(f => f && f !== "All profiles"))].map(f => <option key={f}>{f}</option>)}
                   </select>
                 </Field>
                 <Field label="Tags (comma separated)">
@@ -1252,7 +1312,7 @@ function Editor({ profile, live, onClose, onSave }) {
 }
 
 /* ---- Multi-profile synchroniser: one change, applied to many ------ */
-function SyncModal({ ids, onClose, onApply }) {
+function SyncModal({ ids, folders = [], onClose, onApply }) {
   const [engine, setEngine] = useState("");
   const [locale, setLocale] = useState("");
   const [tag, setTag] = useState("");
@@ -1296,7 +1356,7 @@ function SyncModal({ ids, onClose, onApply }) {
             <Field label="Move to folder">
               <select className="ps-in" value={folder} onChange={e => setFolder(e.target.value)}>
                 <option value="">— leave unchanged —</option>
-                {FOLDERS.filter(f => f !== "All profiles").map(f => <option key={f}>{f}</option>)}
+                {folders.filter(f => f !== "All profiles").map(f => <option key={f}>{f}</option>)}
               </select>
             </Field>
             <Field label="Add tags (comma separated)">
@@ -1876,6 +1936,7 @@ function CommandPalette({ onClose, profiles, setView, setEditor, toggleRun, togg
       ["Go to Engines", () => setView("engines"), Blocks],
       ["Go to Proxies", () => setView("proxies"), Globe],
       ["Go to Automation", () => setView("automation"), Zap],
+      ["Go to Folders", () => setView("folders"), FolderTree],
       ["Go to Settings", () => setView("settings"), Settings],
     ].map(([label, run, Ic]) => ({ label, run, Ic, group: "Navigate" }));
     const actions = [
@@ -1929,11 +1990,159 @@ function CommandPalette({ onClose, profiles, setView, setEditor, toggleRun, togg
   );
 }
 
+/* ---- Folders manager --------------------------------------------- */
+function FoldersView({ folders, profiles, onOpen, onCreate, onRename, onDelete }) {
+  const [newName, setNewName] = useState("");
+  const [editing, setEditing] = useState(null);   // folder being renamed
+  const [draft, setDraft] = useState("");
+  const [confirm, setConfirm] = useState(null);    // folder pending delete
+
+  const stat = (name) => {
+    const inF = profiles.filter(p => p.folder === name);
+    return {
+      total: inF.length,
+      running: inF.filter(p => p.status === "running").length,
+      coherent: inF.filter(p => coherence(p).length === 0).length,
+    };
+  };
+  const submitNew = () => { const n = newName.trim(); if (n) { onCreate(n); setNewName(""); } };
+  const commitRename = () => { if (editing) onRename(editing, draft); setEditing(null); setDraft(""); };
+
+  return (
+    <div className="ps-scroll">
+      <div className="ps-view-head">
+        <div>
+          <h2 className="ps-view-title">Folders</h2>
+          <p className="ps-view-sub">Group profiles by client, platform or project. Renaming or deleting a
+            folder moves the profiles inside it — nothing is deleted.</p>
+        </div>
+        <div className="ps-newfold">
+          <FolderPlus size={15} color={T.muted} />
+          <input className="ps-in" placeholder="New folder name" value={newName}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && submitNew()} />
+          <button className="ps-btn primary sm" onClick={submitNew}><Plus size={14} /> Add</button>
+        </div>
+      </div>
+
+      <div className="ps-fold-grid">
+        {folders.length === 0 && (
+          <div className="ps-empty" style={{ gridColumn: "1/-1", padding: 48 }}>
+            <div className="ps-empty-ic"><FolderTree size={26} color={T.violet} /></div>
+            <div style={{ color: T.muted, fontSize: 13 }}>No folders yet — add one above.</div>
+          </div>
+        )}
+        {folders.map(f => {
+          const s = stat(f);
+          return (
+            <div key={f} className="ps-fold-card">
+              <div className="ps-fold-top">
+                <div className="ps-fold-ic"><FolderTree size={16} color={T.violet} /></div>
+                {editing === f ? (
+                  <input autoFocus className="ps-in sm" value={draft}
+                    onChange={e => setDraft(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") { setEditing(null); setDraft(""); } }}
+                    onBlur={commitRename} />
+                ) : (
+                  <button className="ps-fold-name" onClick={() => onOpen(f)} title="Open in Profiles">{f}</button>
+                )}
+              </div>
+              <div className="ps-fold-stats">
+                <span><b>{s.total}</b> profile{s.total === 1 ? "" : "s"}</span>
+                {s.running > 0 && <span className="ps-fold-run"><Circle size={7} fill={T.mint} color={T.mint} /> {s.running} running</span>}
+                <span className="ps-fold-coh"><ShieldCheck size={12} /> {s.coherent}/{s.total}</span>
+              </div>
+              <div className="ps-fold-actions">
+                <button className="ps-btn ghost sm" onClick={() => onOpen(f)}>Open <ArrowRight size={13} /></button>
+                <div style={{ flex: 1 }} />
+                <button className="ps-iconbtn sm" title="Rename" onClick={() => { setEditing(f); setDraft(f); }}><Pencil size={13} /></button>
+                {confirm === f ? (
+                  <button className="ps-btn danger sm" onClick={() => { onDelete(f); setConfirm(null); }} onMouseLeave={() => setConfirm(null)}>Confirm?</button>
+                ) : (
+                  <button className="ps-iconbtn sm danger" title="Delete folder" onClick={() => setConfirm(f)}><Trash2 size={13} /></button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ---- Settings ---------------------------------------------------- */
+function SettingsView({ live, config, engines, defaultEngine, onChangeEngine, palette, toggleTheme, counts }) {
+  return (
+    <div className="ps-scroll">
+      <div className="ps-view-head">
+        <div>
+          <h2 className="ps-view-title">Settings</h2>
+          <p className="ps-view-sub">Defaults for new profiles, appearance, and where Persona keeps your data.</p>
+        </div>
+      </div>
+
+      <div className="ps-set-grid">
+        <div className="ps-set-card">
+          <div className="ps-set-h"><Palette size={15} color={T.violet} /> Appearance</div>
+          <div className="ps-set-row">
+            <div>
+              <div className="ps-set-label">Theme</div>
+              <div className="ps-set-note">Switch the whole console between light and dark.</div>
+            </div>
+            <button className="ps-btn ghost" onClick={toggleTheme}>
+              {palette === "light" ? <><Moon size={14} /> Dark</> : <><Sun size={14} /> Light</>}
+            </button>
+          </div>
+        </div>
+
+        <div className="ps-set-card">
+          <div className="ps-set-h"><Blocks size={15} color={T.violet} /> Default launch engine</div>
+          <div className="ps-set-note" style={{ marginBottom: 12 }}>Every new profile starts on this engine — you can still change it per profile.</div>
+          <div className="ps-seg wrap">
+            {ENGINE_ORDER.map(en => (
+              <button key={en} className={defaultEngine === en ? "on" : ""} onClick={() => onChangeEngine(en)}
+                title={engines && engines[en] === false ? "Not installed" : ""}>
+                {ENGINE_META[en].label}{ENGINE_META[en].recommended ? " ★" : ""}
+                {engines && engines[en] === false && <span className="ps-set-missing"> · not installed</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="ps-set-card">
+          <div className="ps-set-h"><HardDrive size={15} color={T.violet} /> Storage</div>
+          {live && config?.root ? (
+            <>
+              <div className="ps-set-label">Data location</div>
+              <pre className="ps-code" style={{ marginTop: 6 }}>{config.root}</pre>
+              <div className="ps-set-note" style={{ marginTop: 8 }}>Profiles, sessions, proxies and settings all live here on your machine. Back up this folder to move everything to another computer.</div>
+            </>
+          ) : (
+            <div className="ps-set-note">Connect the engine (<code>persona serve</code>) to see where your data is stored. In demo mode nothing is written to disk.</div>
+          )}
+          <div className="ps-set-counts">
+            <span><b>{counts.profiles}</b> profiles</span>
+            <span><b>{counts.folders}</b> folders</span>
+            <span><b>{counts.proxies}</b> proxies</span>
+          </div>
+        </div>
+
+        <div className="ps-set-card">
+          <div className="ps-set-h"><Info size={15} color={T.violet} /> About</div>
+          <div className="ps-set-row">
+            <div className="ps-set-label">Persona Studio</div>
+            <span className="ps-pill" style={{ background: T.violetDim, color: T.lilac }}>v{config?.version || "0.1.0"}</span>
+          </div>
+          <div className="ps-set-note" style={{ marginTop: 6 }}>Open-source, self-hosted anti-detect browser &amp; profile manager. {live ? "Engine connected." : "Running in demo mode — start persona serve to go live."}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Placeholder({ view }) {
   const map = {
-    folders: [FolderTree, "Folder manager", "Organize profiles into folders and drag between them."],
     team: [Users, "Team", "Invite members, set roles, and share profiles securely."],
-    settings: [Settings, "Settings", "Engine paths, storage location, and defaults."],
   };
   const [Ic, title, desc] = map[view] || [Boxes, "Soon", ""];
   return (
@@ -1995,7 +2204,7 @@ a { color: inherit; }
 .ps-navitem.active { background: ${T.surface2}; color: ${T.text}; box-shadow: inset 2px 0 0 ${T.violet}; }
 .ps-nav-tag { position: absolute; right: 10px; font-size: 9px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: ${T.bg}; background: ${T.mint}; padding: 1px 5px; border-radius: 5px; }
 .ps-folders { margin-top: 22px; flex: 1; overflow-y: auto; }
-.ps-folders-h { font-size: 10px; letter-spacing: 1.6px; text-transform: uppercase; color: ${T.dim}; padding: 0 8px 8px; }
+.ps-folders-h { display: flex; align-items: center; font-size: 10px; letter-spacing: 1.6px; text-transform: uppercase; color: ${T.dim}; padding: 0 8px 8px; }
 .ps-folder { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 9px; border-radius: 8px; border: none; background: transparent; color: ${T.muted}; font-size: 12.5px; cursor: pointer; transition: .14s; }
 .ps-folder:hover { background: ${T.surface}; color: ${T.text}; }
 .ps-folder.active { color: ${T.lilac}; background: ${T.violetDim}; }
@@ -2254,6 +2463,49 @@ select.ps-in { cursor: pointer; }
 .ps-hint { display: flex; align-items: flex-start; gap: 8px; font-size: 11.5px; color: ${T.muted}; margin-top: 12px; line-height: 1.55; background: ${T.bg}; border: 1px solid ${T.lineSoft}; padding: 11px 13px; border-radius: 10px; }
 .ps-hint svg { flex-shrink: 0; margin-top: 1px; color: ${T.violet}; }
 .ps-drawer-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 17px 22px; border-top: 1px solid ${T.line}; }
+
+/* ---- shared view header (Folders, Settings) ---- */
+.ps-view-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; flex-wrap: wrap; margin: 6px 0 20px; }
+.ps-view-title { font-family: ${FONT.display}; font-size: 22px; font-weight: 700; margin: 0; letter-spacing: -.3px; }
+.ps-view-sub { color: ${T.muted}; font-size: 12.5px; line-height: 1.55; margin: 5px 0 0; max-width: 520px; }
+.ps-in.sm { padding: 7px 10px; font-size: 12.5px; }
+.ps-btn.danger { background: ${T.red}1e; border-color: ${T.red}66; color: ${T.red}; }
+.ps-btn.danger:hover { background: ${T.red}2e; }
+.ps-iconbtn.sm { width: 30px; height: 30px; border-radius: 8px; }
+.ps-iconbtn.sm.danger:hover { color: ${T.red}; border-color: ${T.red}; }
+.ps-seg.wrap { flex-wrap: wrap; }
+.ps-seg.wrap button { flex: 0 0 auto; padding: 7px 12px; }
+
+/* ---- Folders manager ---- */
+.ps-newfold { display: flex; align-items: center; gap: 8px; background: ${T.surface}; border: 1px solid ${T.line}; border-radius: 11px; padding: 6px 8px 6px 12px; }
+.ps-newfold input { border: none; background: transparent; min-width: 180px; }
+.ps-newfold input:focus { outline: none; }
+.ps-fold-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+.ps-fold-card { background: ${T.surface}; border: 1px solid ${T.line}; border-radius: 14px; padding: 15px 16px; display: flex; flex-direction: column; gap: 11px; transition: border-color .15s, transform .15s; }
+.ps-fold-card:hover { border-color: ${T.violet}66; transform: translateY(-2px); }
+.ps-fold-top { display: flex; align-items: center; gap: 10px; }
+.ps-fold-ic { width: 32px; height: 32px; border-radius: 9px; background: ${T.violetDim}; display: flex; align-items: center; justify-content: center; flex: none; }
+.ps-fold-name { background: none; border: none; color: ${T.text}; font-family: ${FONT.display}; font-size: 15px; font-weight: 650; cursor: pointer; padding: 0; text-align: left; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ps-fold-name:hover { color: ${T.lilac}; }
+.ps-fold-stats { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 11.5px; color: ${T.muted}; }
+.ps-fold-stats b { color: ${T.text}; font-weight: 700; }
+.ps-fold-run, .ps-fold-coh { display: inline-flex; align-items: center; gap: 4px; }
+.ps-fold-coh svg { color: ${T.mint}; }
+.ps-fold-actions { display: flex; align-items: center; gap: 6px; border-top: 1px solid ${T.lineSoft}; padding-top: 11px; }
+
+/* ---- Settings ---- */
+.ps-set-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; align-items: start; }
+.ps-set-card { background: ${T.surface}; border: 1px solid ${T.line}; border-radius: 14px; padding: 18px 18px 16px; }
+.ps-set-h { display: flex; align-items: center; gap: 8px; font-family: ${FONT.display}; font-size: 14px; font-weight: 650; margin-bottom: 14px; }
+.ps-set-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.ps-set-label { font-size: 13px; font-weight: 600; color: ${T.text}; }
+.ps-set-note { font-size: 11.5px; color: ${T.muted}; line-height: 1.55; }
+.ps-set-note code { font-family: ${FONT.mono}; font-size: 11px; color: ${T.text}; }
+.ps-set-missing { font-size: 10px; color: ${T.amber}; font-weight: 600; }
+.ps-set-counts { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px; padding-top: 13px; border-top: 1px solid ${T.lineSoft}; font-size: 12px; color: ${T.muted}; }
+.ps-set-counts b { color: ${T.text}; font-weight: 700; }
+.ps-folders-manage { background: none; border: none; color: ${T.violet}; font-size: 10.5px; font-weight: 600; cursor: pointer; font-family: inherit; padding: 0; }
+.ps-folders-manage:hover { color: ${T.lilac}; text-decoration: underline; }
 
 @media (max-width: 860px) {
   .ps-side { position: fixed; z-index: 40; transform: translateX(-100%); }

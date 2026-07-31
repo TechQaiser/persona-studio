@@ -34,6 +34,11 @@ export const api = {
   engines: () => req("GET", "/api/engines"),
   getConfig: () => req("GET", "/api/config"),
   setDefaultEngine: (name) => req("PUT", "/api/config", { default_engine: name }),
+  // Folders: a persisted list the sidebar and editor share. Rename/delete also
+  // reassign the profiles that live in the folder.
+  createFolder: (name) => req("POST", "/api/folders", { name }),
+  renameFolder: (from, to) => req("POST", "/api/folders/rename", { from, to }),
+  deleteFolder: (name, reassignTo) => req("POST", "/api/folders/delete", { name, reassignTo }),
   list: () => req("GET", "/api/profiles"),
   create: (p) => req("POST", "/api/profiles", p),
   update: (p) => req("PUT", `/api/profiles/${p.id}`, p),

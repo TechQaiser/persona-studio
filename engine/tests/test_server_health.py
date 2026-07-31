@@ -96,3 +96,35 @@ def test_collisions_endpoint_and_health_flag(client):
     rows = {r["name"]: r for r in h["profiles"]}
     assert rows["Twin-A"]["collides"] is True and rows["Twin-A"]["needsAttention"] is True
     assert rows["Solo"]["collides"] is False
+
+
+def test_config_exposes_folders_root_and_version(client):
+    cfg = client.get("/api/config").json()
+    assert "default_engine" in cfg
+    assert isinstance(cfg["folders"], list)
+    assert cfg["root"] and isinstance(cfg["root"], str)
+    assert cfg["version"]
+    # A folder a profile lives in shows up even without being created explicitly.
+    _make_profile(client, "InFolder", folder="Crypto")
+    assert "Crypto" in client.get("/api/config").json()["folders"]
+
+
+def test_folder_create_rename_delete(client):
+    # Create an empty folder — it persists even with no profiles in it.
+    assert "Ads" in client.post("/api/folders", json={"name": "Ads"}).json()["folders"]
+    assert client.post("/api/folders", json={"name": ""}).status_code == 400
+
+    p = _make_profile(client, "Store", folder="Ads")
+
+    # Rename carries the profile over to the new name.
+    r = client.post("/api/folders/rename", json={"from": "Ads", "to": "Marketing"}).json()
+    assert "Marketing" in r["folders"] and "Ads" not in r["folders"]
+    moved = {row["id"]: row for row in client.get("/api/profiles").json()}
+    assert moved[p["id"]]["folder"] == "Marketing"
+
+    # Delete reassigns its profiles to Unfiled rather than dropping them.
+    r = client.post("/api/folders/delete", json={"name": "Marketing"}).json()
+    assert "Marketing" not in r["folders"]
+    after = {row["id"]: row for row in client.get("/api/profiles").json()}
+    assert after[p["id"]]["folder"] == "Unfiled"
+    assert len(after) == 1                          # profile survived the delete

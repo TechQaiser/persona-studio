@@ -5,6 +5,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Folders manager** (dashboard **Folders** tab): create, rename and delete
+  folders, each shown as a card with live profile / running / coherent counts and
+  one-click open. Folders are persisted server-side (`GET /api/config` →
+  `folders`, plus `POST /api/folders`, `…/folders/rename`, `…/folders/delete`), so
+  an empty folder survives a reload; renaming or deleting one moves the profiles
+  inside it (delete reassigns to *Unfiled*) rather than dropping anything. The
+  editor, bulk-edit and sidebar dropdowns now read this live list.
+- **Settings page** (dashboard **Settings** tab): theme toggle, the default launch
+  engine for new profiles (persisted via `PUT /api/config`, with an "not
+  installed" hint per engine), the on-disk storage location and a data summary
+  (profiles / folders / proxies), and an about card. `GET /api/config` now also
+  returns `root` and `version`.
 - **Command palette** (dashboard, ⌘K / Ctrl-K): fuzzy-search across views,
   actions (new profile, toggle theme) and every profile (open / launch / stop),
   driven entirely from the keyboard (↑/↓/Enter, Esc to close).

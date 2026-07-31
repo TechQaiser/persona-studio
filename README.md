@@ -274,6 +274,10 @@ stays the same manager over all of them.
 - [x] Backup & restore (`persona backup` / `restore`) — a profile **and its
       session** zipped into one portable file, movable to another machine
 - [x] Bulk grid actions (warm up / export the selection) + tag filtering
+- [x] Folders manager (dashboard) — create / rename / delete folders with live
+      counts; renaming or deleting one moves its profiles instead of dropping them
+- [x] Settings page (dashboard) — theme, default launch engine, storage location
+      and data summary, backed by `GET`/`PUT /api/config`
 
 **Next**
 

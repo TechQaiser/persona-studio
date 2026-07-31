@@ -95,6 +95,25 @@ class DashboardStore:
         f.unlink()
         return True
 
+    # Dashboard-only settings (folder list, etc.) live in a sibling file rather
+    # than inside the dashboard/ dir, so list()'s "*.json" glob never mistakes
+    # them for a profile.
+    def _meta_path(self) -> Path:
+        return self.dir.parent / "dashboard-config.json"
+
+    def get_meta(self) -> dict:
+        f = self._meta_path()
+        if not f.exists():
+            return {}
+        try:
+            return json.loads(f.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+
+    def set_meta(self, meta: dict) -> dict:
+        self._meta_path().write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        return meta
+
 
 class ProxyPool:
     """A managed list of proxies the dashboard can import, test and assign."""
@@ -389,9 +408,27 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
         from . import drivers
         return drivers.available()
 
+    def _folder_list() -> list[str]:
+        """Every folder that exists: the ones the user created (persisted in
+        meta) plus any a profile currently lives in, de-duplicated, order kept."""
+        meta = dash.get_meta()
+        used = sorted({p.get("folder") for p in dash.list() if p.get("folder")})
+        return list(dict.fromkeys([*meta.get("folders", []), *used]))
+
+    def _persist_folders(names: list[str]) -> list[str]:
+        meta = dash.get_meta()
+        meta["folders"] = list(dict.fromkeys(n for n in names if n))
+        dash.set_meta(meta)
+        return _folder_list()
+
     @app.get("/api/config")
     def get_config():
-        return {"default_engine": engine_store.get_default_engine()}
+        return {
+            "default_engine": engine_store.get_default_engine(),
+            "folders": _folder_list(),
+            "root": str(engine_store.root),
+            "version": "0.1.0",
+        }
 
     @app.put("/api/config")
     def set_config(cfg: dict):
@@ -401,7 +438,38 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
             if name not in drivers.names():
                 raise HTTPException(400, f"unknown engine '{name}'")
             engine_store.set_default_engine(name)
-        return {"default_engine": engine_store.get_default_engine()}
+        return get_config()
+
+    @app.post("/api/folders")
+    def create_folder(body: dict):
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "folder name required")
+        return {"folders": _persist_folders([*_folder_list(), name])}
+
+    @app.post("/api/folders/rename")
+    def rename_folder(body: dict):
+        src = (body.get("from") or "").strip()
+        dst = (body.get("to") or "").strip()
+        if not src or not dst:
+            raise HTTPException(400, "both 'from' and 'to' are required")
+        for p in dash.list():                       # move every profile over
+            if p.get("folder") == src:
+                p["folder"] = dst
+                dash.save(p)
+        return {"folders": _persist_folders([dst if f == src else f for f in _folder_list()])}
+
+    @app.post("/api/folders/delete")
+    def delete_folder(body: dict):
+        name = (body.get("name") or "").strip()
+        reassign = (body.get("reassignTo") or "Unfiled").strip() or "Unfiled"
+        if not name:
+            raise HTTPException(400, "folder name required")
+        for p in dash.list():                       # its profiles aren't deleted
+            if p.get("folder") == name:
+                p["folder"] = reassign
+                dash.save(p)
+        return {"folders": _persist_folders([f for f in _folder_list() if f != name])}
 
     def _remember_engine(profile: dict):
         # "Last engine wins": the engine picked for a profile becomes the
