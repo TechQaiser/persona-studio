@@ -3,6 +3,7 @@
 from persona import generate
 from persona.drivers import _extension_args
 from persona.models import Profile
+from persona.store import ProfileStore
 
 
 def mk(paths):
@@ -53,3 +54,36 @@ def test_profiles_saved_before_extensions_existed_still_load():
     d = mk([]).to_dict()
     del d["extensions"]
     assert Profile.from_dict(d).extensions == []
+
+
+# ---- the global default set --------------------------------------------
+# Chromium has no browser-wide extension store to hook, so "install once for
+# every profile" has to mean "copy onto each profile as it is created".
+
+
+def test_default_extensions_round_trip(tmp_path):
+    store = ProfileStore(tmp_path)
+    assert store.get_default_extensions() == []
+    store.set_default_extensions(["/opt/ext/ublock"])
+    assert ProfileStore(tmp_path).get_default_extensions() == ["/opt/ext/ublock"]
+
+
+def test_new_profiles_inherit_the_default_set(tmp_path):
+    from persona.cli import build_parser
+    store = ProfileStore(tmp_path)
+    ext = tmp_path / "shared-ext"
+    ext.mkdir()
+    store.set_default_extensions([str(ext)])
+
+    args = build_parser().parse_args(["create", "inherits"])
+    assert args.func(args, store) == 0
+    assert store.find_by_name("inherits").extensions == [str(ext)]
+
+
+def test_bulk_apply_pushes_extensions_onto_existing_profiles(tmp_path):
+    # Existing profiles predate the default set, so they need an explicit push.
+    from persona.bulk import apply_patch
+    prof = Profile(name="old", fingerprint=generate(seed=2))
+    assert prof.extensions == []
+    assert "extensions" in apply_patch(prof, {"extensions": ["/opt/ext/ublock"]})
+    assert prof.extensions == ["/opt/ext/ublock"]

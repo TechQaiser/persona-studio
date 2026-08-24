@@ -33,7 +33,7 @@ Issues = "https://github.com/TechQaiser/persona-studio/issues"
 launch = ["playwright>=1.40"]
 api = ["fastapi>=0.110", "uvicorn>=0.27"]
 secure = ["cryptography>=42.0"]
-dev = ["pytest>=7.0", "cryptography>=42.0"]
+dev = ["pytest>=7.0", "cryptography>=42.0", "httpx>=0.27"]
 
 [project.scripts]
 persona = "persona.cli:main"

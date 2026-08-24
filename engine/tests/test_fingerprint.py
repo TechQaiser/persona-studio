@@ -143,3 +143,29 @@ def test_real_screen_size_is_coherent():
     fp.screen_width, fp.screen_height = 3440, 1440
     fp.viewport_width, fp.viewport_height = 3440, 1400
     assert "screen resolution" not in " ".join(validate(fp))
+
+
+def test_italian_and_belgian_locales_are_coherent():
+    # A proxy pool that exits in Italy or Belgium had no locale to align to,
+    # so those profiles could never pass the timezone check.
+    from persona import devices
+    from persona.fingerprint import generate, validate
+    for cc, locale, tz in (("IT", "it-IT", "Europe/Rome"),
+                           ("BE", "nl-BE", "Europe/Brussels")):
+        assert devices.COUNTRY_TO_LOCALE[cc] == locale
+        assert devices.LOCALE_TO_COUNTRY[locale] == cc
+        assert cc in devices.COUNTRY_GEO
+        fp = generate(seed=3, locale=locale)
+        assert fp.timezone == tz
+        assert validate(fp) == []
+
+
+def test_every_locale_has_a_country_and_coordinates():
+    # A locale the country tables don't know about silently loses geolocation
+    # and proxy alignment, so keep the four tables in step.
+    from persona import devices
+    for locale in devices.LOCALES:
+        cc = devices.LOCALE_TO_COUNTRY.get(locale)
+        assert cc, f"{locale} has no country"
+        assert cc in devices.COUNTRY_GEO, f"{cc} has no coordinates"
+        assert devices.COUNTRY_TO_LOCALE.get(cc) == locale

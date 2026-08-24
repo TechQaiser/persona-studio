@@ -40,6 +40,11 @@ class Fingerprint:
     fonts: list[str] = field(default_factory=list)   # installed-font probe answers
     cameras: int = 1                                  # enumerateDevices() videoinput
     microphones: int = 1                              # enumerateDevices() audioinput
+    # How WebRTC may behave. Chromium's own proxy flag does not reliably stop
+    # ICE from handing out a non-proxied public address, so the in-page layer
+    # has to finish the job: "altered" drops those candidates, "disabled"
+    # removes RTCPeerConnection outright, "real" leaves WebRTC untouched.
+    webrtc: str = "altered"
 
     def to_dict(self) -> dict:
         return asdict(self)

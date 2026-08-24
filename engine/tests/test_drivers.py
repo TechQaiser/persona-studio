@@ -73,3 +73,73 @@ def test_webrtc_forces_proxy_when_one_is_set():
 
 def test_webrtc_hides_local_ip_without_proxy():
     assert "default_public_interface_only" in _webrtc_arg(_p())[0]
+
+
+# ---- headless has to use the full browser, not the headless shell -------
+# Playwright's default headless binary is chromium_headless_shell, which cannot
+# load extensions at all and announces itself as HeadlessChrome over CDP. The
+# "chromium" channel is the same download in --headless=new mode.
+
+
+class _FakeContext:
+    def __init__(self):
+        self.pages = []
+        self.closed = False
+
+    def add_init_script(self, script):
+        pass
+
+    def new_page(self):
+        page = _FakePage()
+        self.pages.append(page)
+        return page
+
+    def close(self):
+        self.closed = True
+
+
+class _FakePage:
+    url = "about:blank"
+
+    def goto(self, *a, **k):
+        pass
+
+
+class _FakePlaywright:
+    def __init__(self, seen):
+        self.seen = seen
+
+        class _Chromium:
+            @staticmethod
+            def launch_persistent_context(**kwargs):
+                seen.update(kwargs)
+                return _FakeContext()
+
+        self.chromium = _Chromium()
+
+    def start(self):
+        return self
+
+    def stop(self):
+        pass
+
+
+def _launch_kwargs(headless):
+    from persona.drivers import _launch_playwright_like
+    from persona.store import ProfileStore
+    import tempfile
+
+    seen = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        prof = Profile(name="k", fingerprint=generate(seed=3))
+        _launch_playwright_like(lambda: _FakePlaywright(seen), prof,
+                                ProfileStore(tmp), headless, keep_open=True)
+    return seen
+
+
+def test_headless_uses_the_full_chromium_channel():
+    assert _launch_kwargs(headless=True)["channel"] == "chromium"
+
+
+def test_headed_leaves_the_channel_alone():
+    assert _launch_kwargs(headless=False)["channel"] is None

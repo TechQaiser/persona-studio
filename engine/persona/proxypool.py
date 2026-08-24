@@ -84,6 +84,24 @@ def parse_many(text: str) -> list[dict]:
     return out
 
 
+SOCKS_AUTH_NOTE = (
+    "Chromium implements proxy authentication for HTTP(S) proxies only, so a "
+    "SOCKS proxy's username/password is ignored and the connection will most "
+    "likely fail. Use the vendor's HTTP endpoint, or point the profile at a "
+    "local SOCKS forwarder that needs no credentials."
+)
+
+
+def proxy_warnings(profile) -> list:
+    """Problems with a profile's proxy that the browser cannot work around."""
+    pr = getattr(profile, "proxy", None)
+    if not pr:
+        return []
+    if str(pr.server or "").lower().startswith("socks") and (pr.username or pr.password):
+        return [SOCKS_AUTH_NOTE]
+    return []
+
+
 def _proxy_url(proxy: dict) -> str:
     auth = ""
     if proxy.get("user"):
@@ -99,6 +117,8 @@ def check(proxy: dict, timeout: float = 12) -> dict:
     so those are reported as 'needs the profile proxy test' rather than failed.
     """
     if str(proxy.get("type", "HTTP")).upper().startswith("SOCKS"):
+        if proxy.get("user") or proxy.get("pass"):
+            return {"ok": False, "error": SOCKS_AUTH_NOTE}
         return {"ok": None, "error": "SOCKS — test it via a profile's proxy test"}
 
     handler = urllib.request.ProxyHandler({"http": _proxy_url(proxy), "https": _proxy_url(proxy)})

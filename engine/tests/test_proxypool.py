@@ -6,7 +6,7 @@ turns an imported engine profile back into the dashboard shape.
 """
 
 from persona.proxypool import parse_line, parse_many
-from persona.server import to_dashboard_profile, to_engine_profile
+from persona.server import ProxyPool, to_dashboard_profile, to_engine_profile
 from persona import generate
 from persona.models import Profile, Proxy
 
@@ -76,3 +76,21 @@ def test_import_shaped_profile_is_coherent():
                                    "navigator": {"userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/128.0.0.0 Safari/537.36"}})
     d = to_dashboard_profile(prof)
     assert validate(to_engine_profile(d).fingerprint) == []
+
+
+def test_sticky_session_proxies_are_not_collapsed(tmp_path):
+    # Sticky-session vendors serve one host:port for the whole pool and pick the
+    # exit node from the credentials - some vary the username, some only the
+    # password. Every line is a distinct proxy, so none may be deduped away.
+    pool = ProxyPool(tmp_path)
+    lines = ",".join(
+        f"socks5://gate.example.com:32325:acct-1:token-{cc}-{n}"
+        for cc in ("IT", "BE", "UK", "TR") for n in range(1, 5)
+    )
+    added = pool.add_many(parse_many(lines))
+    assert len(added) == 16
+    assert len(pool.list()) == 16
+
+    # Re-importing the same list is still a no-op.
+    assert pool.add_many(parse_many(lines)) == []
+    assert len(pool.list()) == 16

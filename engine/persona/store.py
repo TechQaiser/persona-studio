@@ -61,6 +61,35 @@ class ProfileStore:
         self.save_config(cfg)
         return name
 
+    def get_default_extensions(self) -> list:
+        """Extension folders every new profile starts with.
+
+        Chromium loads extensions per browser instance, and each profile is its
+        own instance, so there is no "install once, applies everywhere" step to
+        hook — a global set has to be copied onto each profile as it is created.
+        """
+        return list(self.get_config().get("default_extensions") or [])
+
+    def set_default_extensions(self, paths) -> list:
+        cfg = self.get_config()
+        cfg["default_extensions"] = [str(p) for p in paths]
+        self.save_config(cfg)
+        return cfg["default_extensions"]
+
+    def get_headless_launch(self) -> bool:
+        """Whether the API launches profiles without a window.
+
+        A GUI-less server has no display for Chromium to open a window on, so
+        the dashboard's launch button needs this on to work there at all.
+        """
+        return bool(self.get_config().get("headless_launch"))
+
+    def set_headless_launch(self, on: bool) -> bool:
+        cfg = self.get_config()
+        cfg["headless_launch"] = bool(on)
+        self.save_config(cfg)
+        return cfg["headless_launch"]
+
     # ---- vault (encrypt-at-rest for secrets) -----------------------------
     # The fields worth encrypting: anything that grants access if leaked. Cookies
     # live in Chromium's own encrypted store, so the one in our plaintext JSON is

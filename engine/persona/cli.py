@@ -42,6 +42,7 @@ from typing import Optional
 from . import __version__
 from .fingerprint import generate, validate
 from .models import Profile, Proxy
+from .proxypool import proxy_warnings
 from .store import ProfileStore
 
 
@@ -86,7 +87,8 @@ def cmd_create(args, store: ProfileStore) -> int:
     if engine in drivers.names() and not drivers.is_installed(engine):
         print(_c(f"Note: engine '{engine}' isn't installed yet; install it before launching.", C.YEL))
     prof = Profile(name=args.name, fingerprint=fp, proxy=proxy,
-                   notes=args.notes or "", tags=args.tag or [], engine=engine)
+                   notes=args.notes or "", tags=args.tag or [], engine=engine,
+                   extensions=store.get_default_extensions())
     store.save(prof)
     print(_c(f"Created profile '{prof.name}'  ", C.GRN) + _c(f"[{prof.id}]", C.DIM))
     _print_summary(prof)
@@ -128,6 +130,8 @@ def cmd_launch(args, store: ProfileStore) -> int:
         print(_c("Warning: fingerprint has consistency issues:", C.YEL))
         for p in problems:
             print(f"  - {p}")
+    for warning in proxy_warnings(prof):
+        print(_c(f"Warning: {warning}", C.YEL))
     engine = args.engine or prof.engine or "playwright"
     print(_c(f"Launching '{prof.name}' via {engine}...", C.CYN))
     from .launcher import launch  # imported lazily (browser deps optional)
@@ -572,7 +576,49 @@ def cmd_attach(args, store: ProfileStore) -> int:
     return 0
 
 
+def _cmd_ext_default(args, store: ProfileStore) -> int:
+    """The global extension set: what every *new* profile starts with.
+
+    Chromium has no browser-wide extension store to hook — each profile is its
+    own browser instance — so "global" means this list is copied onto profiles
+    as they are created. Use `persona apply --extension` to push it onto the
+    profiles that already exist.
+    """
+    current = store.get_default_extensions()
+    if args.ext_command == "default-list":
+        if not current:
+            print(_c("No default extensions. New profiles start with none.", C.DIM))
+            return 0
+        print(_c("Default extensions for new profiles:", C.B))
+        for path in current:
+            missing = "" if Path(path).expanduser().is_dir() else _c("  (folder not found)", C.RED)
+            print(f"  {path}{missing}")
+        return 0
+
+    path = str(Path(args.path).expanduser())
+    if args.ext_command == "default-add":
+        if not Path(path).is_dir():
+            print(_c(f"'{path}' is not a folder. Point at an *unpacked* extension "
+                     f"(the folder containing manifest.json).", C.RED))
+            return 1
+        if path in current:
+            print(_c("Already in the default set.", C.DIM))
+            return 0
+        current.append(path)
+    else:  # default-remove
+        if path not in current:
+            print(_c(f"'{path}' isn't in the default set.", C.RED))
+            return 1
+        current.remove(path)
+    store.set_default_extensions(current)
+    print(_c(f"Default set now has {len(current)} extension(s). "
+             f"New profiles will load them.", C.GRN))
+    return 0
+
+
 def cmd_ext(args, store: ProfileStore) -> int:
+    if args.ext_command.startswith("default"):
+        return _cmd_ext_default(args, store)
     prof = _resolve_or_fail(args, store)
     if not prof:
         return 1
@@ -621,6 +667,9 @@ def cmd_apply(args, store: ProfileStore) -> int:
             patch[key] = getattr(args, key)
     if args.startup_url:
         patch["startup_urls"] = args.startup_url
+    if args.extension is not None:
+        # An empty --extension "" clears the list; otherwise it replaces it.
+        patch["extensions"] = [str(Path(e).expanduser()) for e in args.extension if e]
     if args.add_tag:
         patch["add_tags"] = args.add_tag
     if args.remove_tag:
@@ -979,6 +1028,14 @@ def build_parser() -> argparse.ArgumentParser:
         s = ex.add_parser(verb, help=helptext)
         s.add_argument("ref"); s.add_argument("path")
         s.set_defaults(func=cmd_ext)
+    s = ex.add_parser("default-list",
+                      help="Show the extensions every NEW profile starts with")
+    s.set_defaults(func=cmd_ext)
+    for verb, helptext in (("default-add", "Add to the set every NEW profile starts with"),
+                           ("default-remove", "Drop one from that set")):
+        s = ex.add_parser(verb, help=helptext)
+        s.add_argument("path")
+        s.set_defaults(func=cmd_ext)
 
     c = sub.add_parser("apply", help="Apply one change to many profiles at once")
     c.add_argument("ref", nargs="*", help="Profile names or ids")
@@ -991,6 +1048,8 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--timezone")
     c.add_argument("--notes")
     c.add_argument("--startup-url", action="append", help="Startup URL (repeatable, replaces)")
+    c.add_argument("--extension", action="append",
+                   help="Unpacked extension folder (repeatable, replaces; pass \"\" to clear)")
     c.add_argument("--add-tag", action="append")
     c.add_argument("--remove-tag", action="append")
     c.add_argument("--regen", action="store_true",

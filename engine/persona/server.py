@@ -23,6 +23,8 @@ Run it with:  ``persona serve``  (see ``cli.py``).
 from __future__ import annotations
 
 import json
+import os
+import secrets
 import socket
 import subprocess
 import sys
@@ -33,6 +35,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from . import __version__
 from . import cookies as cookies_mod
 from . import devices
 from .fingerprint import generate, validate
@@ -132,12 +135,21 @@ class ProxyPool:
     def _save(self, items: list[dict]):
         self.path.write_text(json.dumps(items, indent=2), encoding="utf-8")
 
+    @staticmethod
+    def _key(p: dict) -> tuple:
+        # Sticky-session vendors hand out one host:port for the whole pool and
+        # select the exit node from the credentials — some vary the username,
+        # others vary only the password. Credentials are part of a proxy's
+        # identity, so deduping on host:port alone collapses a whole vendor
+        # list into a single entry.
+        return (p["host"], str(p["port"]), p.get("user") or "", p.get("pass") or "")
+
     def add_many(self, proxies: list[dict]) -> list[dict]:
         items = self.list()
-        seen = {(p["host"], str(p["port"])) for p in items}
+        seen = {self._key(p) for p in items}
         added = []
         for pr in proxies:
-            key = (pr["host"], str(pr["port"]))
+            key = self._key(pr)
             if key in seen:
                 continue
             entry = {**pr, "id": uuid.uuid4().hex[:12], "status": "untested"}
@@ -250,6 +262,8 @@ def to_engine_profile(d: dict) -> Profile:
         fonts=devices.FONTS.get(os_key, []),
         cameras=int(d.get("mediaVideo", 1)),
         microphones=int(d.get("mediaAudio", 1)),
+        # The dashboard's WebRTC picker used to be cosmetic - carry it through.
+        webrtc=str(d.get("webrtc") or "Altered").strip().lower(),
         webgl_vendor=vendor,
         webgl_renderer=renderer,
         locale=locale,
@@ -318,7 +332,8 @@ def to_dashboard_profile(prof: Profile) -> dict:
         "memory": fp.device_memory,
         "webglVendor": fp.webgl_vendor,
         "webglRenderer": fp.webgl_renderer,
-        "canvas": "Noise", "webrtc": "Altered", "audio": "Noise", "fonts": "Masked",
+        "canvas": "Noise", "webrtc": fp.webrtc.capitalize(),
+        "audio": "Noise", "fonts": "Masked",
         "locale": fp.locale, "timezone": fp.timezone, "geo": "Prompt",
         "mediaVideo": fp.cameras, "mediaAudio": fp.microphones, "dnt": False,
         "proxy": _proxy_to_dash(prof.proxy),
@@ -368,13 +383,40 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
     running: dict[str, subprocess.Popen] = {}
     attached: dict[str, dict] = {}   # pid -> CDP connection info while attached
 
-    app = FastAPI(title="Persona API", version="0.1.0")
+    app = FastAPI(title="Persona API", version=__version__)
+
+    # The API can create profiles, launch browsers and export cookies, so it is
+    # only safe unauthenticated because it binds to localhost. Setting
+    # PERSONA_API_TOKEN turns on bearer auth for anything that leaves the
+    # machine (a server behind a tunnel, a reverse proxy, an agent on the LAN)
+    # and narrows CORS at the same time, since "*" plus a token is a token any
+    # web page could spend.
+    api_token = (os.environ.get("PERSONA_API_TOKEN") or "").strip()
+    allow_origins = _parse_lines(os.environ.get("PERSONA_ALLOWED_ORIGINS") or "") or (
+        [] if api_token else ["*"]
+    )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=allow_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    if api_token:
+        @app.middleware("http")
+        async def _require_token(request, call_next):
+            # Preflight carries no Authorization header by design.
+            if request.method == "OPTIONS":
+                return await call_next(request)
+            sent = request.headers.get("authorization", "")
+            if sent.lower().startswith("bearer "):
+                sent = sent[7:]
+            else:
+                sent = request.headers.get("x-persona-token", "")
+            if not secrets.compare_digest(sent.strip(), api_token):
+                from fastapi.responses import JSONResponse
+                return JSONResponse({"detail": "invalid or missing API token"}, status_code=401)
+            return await call_next(request)
 
     def is_running(pid: str) -> bool:
         proc = running.get(pid)
@@ -401,7 +443,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
 
     @app.get("/api/health")
     def health():
-        return {"ok": True, "version": "0.1.0"}
+        return {"ok": True, "version": __version__}
 
     @app.get("/api/engines")
     def engines():
@@ -425,9 +467,11 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
     def get_config():
         return {
             "default_engine": engine_store.get_default_engine(),
+            "default_extensions": engine_store.get_default_extensions(),
+            "headless_launch": engine_store.get_headless_launch(),
             "folders": _folder_list(),
             "root": str(engine_store.root),
-            "version": "0.1.0",
+            "version": __version__,
         }
 
     @app.put("/api/config")
@@ -438,6 +482,15 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
             if name not in drivers.names():
                 raise HTTPException(400, f"unknown engine '{name}'")
             engine_store.set_default_engine(name)
+        exts = cfg.get("default_extensions")
+        if exts is not None:
+            if isinstance(exts, str):
+                exts = _parse_lines(exts)
+            if not isinstance(exts, list):
+                raise HTTPException(400, "default_extensions must be a list of folder paths")
+            engine_store.set_default_extensions(exts)
+        if cfg.get("headless_launch") is not None:
+            engine_store.set_headless_launch(bool(cfg["headless_launch"]))
         return get_config()
 
     @app.post("/api/folders")
@@ -482,9 +535,19 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
     def list_profiles():
         return [decorate(p) for p in dash.list()]
 
+    def _apply_default_extensions(profile: dict) -> dict:
+        # The dashboard keeps extensions as newline-separated text. Only fill it
+        # in when the caller left it empty, so an explicit choice always wins.
+        if not (profile.get("extensions") or "").strip():
+            defaults = engine_store.get_default_extensions()
+            if defaults:
+                profile["extensions"] = "\n".join(defaults)
+        return profile
+
     @app.post("/api/profiles")
     def create_profile(profile: dict):
         profile.pop("_new", None)
+        _apply_default_extensions(profile)
         if not profile.get("engine"):
             profile["engine"] = engine_store.get_default_engine()
         _remember_engine(profile)
@@ -510,7 +573,12 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
         return {"ok": True}
 
     @app.post("/api/profiles/{pid}/launch")
-    def launch_profile(pid: str):
+    def launch_profile(pid: str, body: Optional[dict] = None):
+        """Open the profile in its own browser process.
+
+        Pass ``{"headless": true}`` (or set ``headless_launch`` in the config)
+        on a machine with no display, where a windowed launch cannot start at
+        all. The browser stays up until POST /stop either way."""
         d = dash.get(pid)
         if not d:
             raise HTTPException(404, "profile not found")
@@ -518,10 +586,14 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
             return decorate(d)
         # Materialise a real engine profile, then open it in its own process.
         engine_store.save(to_engine_profile(d))
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "persona", "--data-dir", str(engine_store.root),
-             "launch", pid],
-        )
+        headless = (body or {}).get("headless")
+        if headless is None:
+            headless = engine_store.get_headless_launch()
+        cli = [sys.executable, "-m", "persona", "--data-dir", str(engine_store.root),
+               "launch", pid]
+        if headless:
+            cli.append("--headless")
+        proc = subprocess.Popen(cli)
         running[pid] = proc
         return decorate(d)
 
@@ -720,6 +792,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
         for p in incoming:
             p.pop("_new", None)
             p.pop("id", None)           # always mint a server-side id
+            _apply_default_extensions(p)
             if not p.get("engine"):
                 p["engine"] = engine_store.get_default_engine()
             last_engine = p.get("engine")

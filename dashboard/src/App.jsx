@@ -91,8 +91,9 @@ const LOCALES = {
   "en-US": "America/New_York", "en-GB": "Europe/London", "en-PK": "Asia/Karachi",
   "en-IN": "Asia/Kolkata", "de-DE": "Europe/Berlin", "fr-FR": "Europe/Paris",
   "es-ES": "Europe/Madrid", "tr-TR": "Europe/Istanbul",
+  "it-IT": "Europe/Rome", "nl-BE": "Europe/Brussels",
 };
-const COUNTRY_LOCALE = { US: "en-US", GB: "en-GB", PK: "en-PK", IN: "en-IN", DE: "de-DE", FR: "fr-FR", ES: "es-ES", TR: "tr-TR" };
+const COUNTRY_LOCALE = { US: "en-US", GB: "en-GB", UK: "en-GB", PK: "en-PK", IN: "en-IN", DE: "de-DE", FR: "fr-FR", ES: "es-ES", TR: "tr-TR", IT: "it-IT", BE: "nl-BE" };
 const MODES = {
   canvas: ["Noise", "Block", "Real"], webrtc: ["Altered", "Disabled", "Real"],
   audio: ["Noise", "Real"], fonts: ["Masked", "Real"], geo: ["Prompt", "Allow", "Block"],

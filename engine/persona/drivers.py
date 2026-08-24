@@ -102,6 +102,25 @@ def _extension_args(profile: Profile) -> list[str]:
     return [f"--disable-extensions-except={joined}", f"--load-extension={joined}"]
 
 
+def _wait_until_closed(page) -> None:
+    """Block until the session ends, headed or headless.
+
+    Headed, that is the user closing the window. Headless there is no window,
+    but the session still has to stay up — a server profile is driven over CDP
+    or stopped by the API, and returning early would tear the browser down the
+    moment it finished opening. Blocking on the same event covers both: the page
+    closes when the browser is stopped, and Ctrl-C still interrupts.
+    """
+    try:
+        page.wait_for_event("close", timeout=0)
+    except KeyboardInterrupt:
+        pass
+    except Exception:
+        # The browser died on its own (crash, external kill) — nothing to wait
+        # for any more; fall through to the caller's cleanup.
+        pass
+
+
 def register(name: str, requires: Optional[str] = None):
     """Register a launch backend. ``requires`` is the pip module it needs (if any)."""
     def deco(fn: Callable):
@@ -216,6 +235,12 @@ def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: 
     context = pw.chromium.launch_persistent_context(
         user_data_dir=str(store.user_data_path(profile.id)),
         headless=headless,
+        # Headless defaults to the "headless shell" binary, which cannot load
+        # extensions at all and announces itself as HeadlessChrome over CDP.
+        # The chromium channel is the full browser in --headless=new mode: same
+        # download, extensions work, and the browser stops advertising that it
+        # is headless.
+        channel="chromium" if headless else None,
         args=launch_args,
         # Drop Playwright's automation switch so Chrome doesn't show the
         # "controlled by automated test software" infobar.
@@ -229,8 +254,7 @@ def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: 
     if keep_open:
         return pw, context, page
     try:
-        if not headless:
-            page.wait_for_event("close", timeout=0)
+        _wait_until_closed(page)
     finally:
         context.close()
         pw.stop()
@@ -316,8 +340,7 @@ def _driver_cloak(profile, store, headless=False, keep_open=True, extra_args=Non
     if keep_open:
         return None, context, page
     try:
-        if not headless:
-            page.wait_for_event("close", timeout=0)
+        _wait_until_closed(page)
     finally:
         context.close()
     return None

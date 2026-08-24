@@ -120,6 +120,9 @@ baseline.
 ```bash
 persona ext add acct-01 ./ublock        # unpacked folder (the one with manifest.json)
 persona ext list acct-01
+persona ext default-add ./ublock        # every NEW profile starts with it
+persona ext default-list
+persona apply --all --extension ./ublock   # ...and push it onto existing ones
 persona warmup acct-01 --minutes 10               # browse normally so the session isn't brand-new
 persona warmup acct-01 --preset crypto            # warm up on that vertical's sites
 persona schedule add acct-01 --every 12 --preset ads   # recurring, unattended warm-up
@@ -127,6 +130,18 @@ persona schedule list                             # what's scheduled and when it
 persona schedule run-due                          # run everything due now (for cron/Task Scheduler)
 persona attach acct-01 --port 9222      # open it for Selenium / Puppeteer / Playwright
 ```
+
+Chromium loads extensions per browser instance and every profile *is* its own
+instance, so there is no browser-wide "install once" to hook. `ext default-add`
+is the closest honest equivalent: a set that gets copied onto each profile as it
+is created (CLI, dashboard and `bulk-create` alike). Profiles that already exist
+predate the set, so `apply --extension` is what pushes it onto them; passing
+`--extension ""` clears the list.
+
+Extensions load in headless mode too. Playwright's default headless binary is
+the *headless shell*, which cannot load extensions at all — Persona launches the
+full Chromium in `--headless=new` instead, which also stops the browser
+advertising itself as `HeadlessChrome` over CDP.
 
 `attach` launches the profile with the DevTools protocol listening and prints
 ready-to-paste snippets. Your automation drives *that* browser, so the identity,
@@ -141,6 +156,33 @@ from a background thread; without the server, put `persona schedule run-due` on
 cron or Windows Task Scheduler and it runs whatever's due. This keeps a session
 that you log into once from going "cold" — no fresh cookies, an about-to-expire
 token — which is itself a signal on your next visit.
+
+### WebRTC
+
+WebRTC gathers ICE candidates over UDP, which an HTTP proxy never carries, so
+the browser can hand a page a public address that is not the proxy's exit — the
+one signal that links a proxied session straight back to you. Chromium's
+`--force-webrtc-ip-handling-policy` is set on every launch but does not reliably
+prevent it, so the page layer finishes the job:
+
+| Mode | Behaviour |
+|---|---|
+| `altered` *(default)* | `RTCPeerConnection` keeps working, but candidates carrying a public address are dropped from the ICE events *and* the SDP. Private and mDNS (`.local`) candidates are kept — a real browser behind NAT offers those, so stripping them would be its own tell. |
+| `disabled` | `RTCPeerConnection` is removed entirely. Effective, but a page can notice the API is missing. |
+| `real` | Left untouched. Only for a profile where WebRTC has to work. |
+
+Set it per profile from the dashboard's **Fingerprint → WebRTC** picker (which
+used to be cosmetic), or in the fingerprint itself:
+
+```python
+from dataclasses import replace
+fp = replace(generate(os="windows"), webrtc="disabled")
+```
+
+Being honest about the limit: this is a JavaScript-level patch, so a
+sufficiently determined fingerprinter can detect that `RTCPeerConnection` has
+been wrapped. It stops the address leak, which is the part that actually
+identifies you.
 
 ### Changing many profiles at once
 
@@ -210,6 +252,21 @@ open twice.
 dashboard uses to manage and launch profiles for real. It listens on
 `http://127.0.0.1:8787` by default (`--host` / `--port` to change).
 
+**Authentication.** Unauthenticated by default, which is fine while it is bound
+to localhost — but it can create profiles, launch browsers and export cookies,
+so anything reachable from elsewhere needs a token:
+
+```bash
+export PERSONA_API_TOKEN="a-long-random-string"
+persona serve
+curl -H "Authorization: Bearer $PERSONA_API_TOKEN" http://127.0.0.1:8787/api/config
+```
+
+With a token set, requests without it get `401`, and CORS stops defaulting to
+`*` (set `PERSONA_ALLOWED_ORIGINS` to the origins that genuinely need it —
+`*` plus a token is a token any web page could spend). `X-Persona-Token` works
+in place of the bearer header.
+
 | Method | Path | Does |
 |---|---|---|
 | GET | `/api/health` | Liveness check the dashboard pings on load |
@@ -217,7 +274,7 @@ dashboard uses to manage and launch profiles for real. It listens on
 | POST | `/api/profiles` | Create a profile |
 | PUT | `/api/profiles/{id}` | Update a profile |
 | DELETE | `/api/profiles/{id}` | Delete a profile + its session |
-| POST | `/api/profiles/{id}/launch` | Open the profile in a real Chromium window |
+| POST | `/api/profiles/{id}/launch` | Open the profile in a real Chromium window (`{headless}` for a display-less host) |
 | POST | `/api/profiles/{id}/stop` | Close a running profile |
 | GET | `/api/profiles/{id}/cookies` | Read the profile's cookie jar |
 | POST | `/api/profiles/{id}/cookies` | Import cookies (`text` or `cookies`, plus `clear`) |
@@ -243,6 +300,8 @@ dashboard uses to manage and launch profiles for real. It listens on
 | PUT | `/api/schedules/{id}` | Change interval / preset / enabled |
 | DELETE | `/api/schedules/{id}` | Remove a schedule |
 | POST | `/api/fingerprint/validate` | Coherence check a fingerprint |
+| GET | `/api/config` | Default engine, default extensions, headless-launch flag, folders, data dir |
+| PUT | `/api/config` | Change any of them (`default_engine`, `default_extensions`, `headless_launch`) |
 
 ## Python API
 
