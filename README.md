@@ -278,6 +278,14 @@ stays the same manager over all of them.
       counts; renaming or deleting one moves its profiles instead of dropping them
 - [x] Settings page (dashboard) — theme, default launch engine, storage location
       and data summary, backed by `GET`/`PUT /api/config`
+- [x] Mobile (Android) profiles — coherent handset fingerprints (real model in
+      the UA, matching GPU/screen/RAM) with touch + device-scale emulation at launch
+- [x] Session health (`persona session`, dashboard) — reads the cookie jar and
+      flags expired / soon-to-expire cookies and which logins are still live
+- [x] Duplicate as template — clone a profile's settings with a *fresh* coherent
+      fingerprint, so the copy is a distinct device, never a fingerprint twin
+- [x] Per-profile activity log — launches, warm-ups, trust runs and session
+      checks, shown as a timeline in the editor
 
 **Next**
 

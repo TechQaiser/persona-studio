@@ -386,6 +386,9 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
             stored = dash.get(pid)
             if stored is not None:
                 stored["_last_active"] = time.time()
+                log = stored.get("_activity") or []
+                log.append({"at": time.time(), "kind": "session-end", "detail": ""})
+                stored["_activity"] = log[-60:]
                 dash.save(stored)
             return False
         return True
@@ -398,6 +401,21 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
         d["status"] = "running" if running_now else "stopped"
         d["lastActive"] = "now" if running_now else _rel_time(d.get("_last_active"))
         return d
+
+    ACTIVITY_CAP = 60          # keep the last N events per profile
+
+    def _log_activity(pid: str, kind: str, detail: str = "") -> None:
+        """Append one event to a profile's activity log (newest last), capped.
+
+        The log is a plain list on the stored profile, so it travels with the
+        profile through backup/restore and needs no separate store."""
+        d = dash.get(pid)
+        if d is None:
+            return
+        log = d.get("_activity") or []
+        log.append({"at": time.time(), "kind": kind, "detail": detail})
+        d["_activity"] = log[-ACTIVITY_CAP:]
+        dash.save(d)
 
     @app.get("/api/health")
     def health():
@@ -523,6 +541,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
              "launch", pid],
         )
         running[pid] = proc
+        _log_activity(pid, "launch", d.get("engine") or "")
         return decorate(d)
 
     def _stop(pid: str):
@@ -594,7 +613,9 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
             if body.get("clear"):
                 args.append("--clear")
             _run_cli(*args)
-        return {"ok": True, "imported": len(cookies_mod.parse(raw))}
+        n = len(cookies_mod.parse(raw))
+        _log_activity(pid, "cookies", f"imported {n}")
+        return {"ok": True, "imported": n}
 
     @app.post("/api/profiles/{pid}/proxy-test")
     def proxy_test(pid: str):
@@ -611,6 +632,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
         d["_trust"] = {"grade": rep.get("grade"), "score": rep.get("score"),
                        "at": time.time()}
         dash.save(d)
+        _log_activity(pid, "trust", f"grade {rep.get('grade', '?')}")
         return rep
 
     @app.post("/api/profiles/{pid}/tls")
@@ -683,6 +705,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
         # Warm-up runs for minutes, so it goes in the background exactly like a
         # launch — the profile shows as running and "stop" ends it.
         running[pid] = subprocess.Popen(cli)
+        _log_activity(pid, "warmup", f"{minutes:g}m" + (f" · {body['preset']}" if body.get("preset") else ""))
         return decorate(d)
 
     @app.post("/api/profiles/{pid}/align")
@@ -706,7 +729,66 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
             d["_trust"] = {"grade": after["grade"], "score": after.get("score"),
                            "at": time.time()}
         res["profile"] = decorate(dash.save(d))
+        _log_activity(pid, "align", f"grade {after.get('grade', '?')}" if after.get("grade") else "")
         return res
+
+    @app.post("/api/profiles/{pid}/session")
+    def session_check(pid: str):
+        """Read the profile's cookie jar and report session health — how many
+        cookies are expired or expiring soon, and which logins are still live.
+        Cached as ``_session`` so the Health page can show a badge without
+        re-opening every profile."""
+        d = _prepare(pid)
+        rep = json.loads(_run_cli("session", pid, "--json"))
+        d["_session"] = {"status": rep.get("status"), "logins": rep.get("logins", []),
+                         "expired": rep.get("expired", 0),
+                         "expiringSoon": rep.get("expiringSoon", 0),
+                         "total": rep.get("total", 0), "at": time.time()}
+        dash.save(d)
+        _log_activity(pid, "session", rep.get("status", ""))
+        return rep
+
+    @app.get("/api/profiles/{pid}/activity")
+    def get_activity(pid: str):
+        """The profile's activity log, newest first."""
+        d = dash.get(pid)
+        if not d:
+            raise HTTPException(404, "profile not found")
+        return {"activity": list(reversed(d.get("_activity") or []))}
+
+    @app.post("/api/profiles/{pid}/duplicate")
+    def duplicate_profile(pid: str):
+        """Clone a profile as a template: keep the human settings (proxy, folder,
+        tags, notes, engine, startup URLs, OS + locale) but give it a *fresh
+        coherent fingerprint* so the copy is a genuinely different device — not a
+        fingerprint twin that a site could link back to the original. Runtime
+        history (trust, session, activity, run state) is dropped."""
+        src = dash.get(pid)
+        if not src:
+            raise HTTPException(404, "profile not found")
+        clone = {k: v for k, v in src.items()
+                 if not k.startswith("_") and k not in ("id", "status")}
+        clone["name"] = f"{src.get('name', 'Profile')} copy"
+        clone["status"] = "stopped"
+
+        # Re-roll the device identity so the copy doesn't collide with the source.
+        os_key = OS_TO_ENGINE.get(src.get("os", "Windows"), "windows")
+        fp = generate(os=os_key, locale=src.get("locale") or "en-US")
+        clone.update({
+            "userAgent": fp.user_agent,
+            "browserVersion": fp.chrome_version,
+            "screen": f"{fp.screen_width}x{fp.screen_height}",
+            "cores": fp.hardware_concurrency,
+            "memory": fp.device_memory,
+            "webglVendor": fp.webgl_vendor,
+            "webglRenderer": fp.webgl_renderer,
+            "mediaVideo": fp.cameras,
+            "mediaAudio": fp.microphones,
+            "seed": fp.seed,
+        })
+        saved = dash.save(clone)
+        _log_activity(saved["id"], "created", f"duplicated from {src.get('name', pid)}")
+        return decorate(saved)
 
     @app.post("/api/profiles/batch")
     def batch_create(body: dict):
@@ -933,8 +1015,11 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
             grade = (trust or {}).get("grade")
             collides = pid in colliding
             # "Needs attention" = something a user would want to fix: incoherent,
-            # a known-poor trust grade, or a fingerprint shared with another profile.
-            attention = bool(issues) or (grade in ("C", "D")) or collides
+            # a known-poor trust grade, a fingerprint shared with another profile,
+            # or a session that has expired / is about to.
+            sess_status = (d.get("_session") or {}).get("status")
+            attention = (bool(issues) or (grade in ("C", "D")) or collides
+                         or sess_status in ("stale", "expiring"))
 
             rows.append({
                 "id": pid,
@@ -949,6 +1034,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
                 "proxy": {"set": has_proxy, "country": px.get("country") or None,
                           "type": px.get("type") if has_proxy else None},
                 "trust": trust,
+                "session": d.get("_session"),
                 "schedule": ({"enabled": sc.get("enabled", True),
                               "everyHours": sc.get("everyHours"),
                               "preset": sc.get("preset")} if sc else None),

@@ -20,8 +20,8 @@ from . import devices
 from .models import Fingerprint, Proxy
 
 
-def _build_user_agent(os_key: str, chrome: str) -> str:
-    token = devices.OS_UA_TOKEN[os_key]
+def _build_user_agent(os_key: str, chrome: str, token: Optional[str] = None) -> str:
+    token = token or devices.OS_UA_TOKEN[os_key]
     if os_key == "android":
         return (
             f"Mozilla/5.0 ({token}) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -31,6 +31,12 @@ def _build_user_agent(os_key: str, chrome: str) -> str:
         f"Mozilla/5.0 ({token}) AppleWebKit/537.36 (KHTML, like Gecko) "
         f"Chrome/{chrome} Safari/537.36"
     )
+
+
+def _android_token(device: dict) -> str:
+    """The `(...)` platform token in an Android Chrome UA, describing the handset:
+    e.g. ``Linux; Android 13; Pixel 7``."""
+    return f"Linux; Android {device['android']}; {device['model']}"
 
 
 def _pick_locale(rng: random.Random, locale: Optional[str],
@@ -78,20 +84,31 @@ def generate(
     # 2. Browser version.
     chrome = rng.choice(devices.CHROME_VERSIONS)
 
+    # On Android everything below (model, screen, GPU, RAM, UA token) has to
+    # describe one real handset, so we pick a whole device and draw from it.
+    device = rng.choice(devices.ANDROID_DEVICES) if is_mobile else None
+
     # 3. Screen + viewport. Viewport is the screen minus realistic chrome/taskbar.
-    sw, sh = rng.choice(devices.SCREENS[os_key])
-    if is_mobile:
-        vw, vh = sw, sh - rng.choice([0, 80, 120])
+    if device:
+        sw, sh = device["screen"]
+        vw, vh = sw, sh - rng.choice([0, 56, 80])   # URL bar / gesture area
     else:
+        sw, sh = rng.choice(devices.SCREENS[os_key])
         vw = sw - rng.choice([0, 16])
-        vh = sh - rng.choice([74, 88, 104, 120])  # browser UI + OS bar
+        vh = sh - rng.choice([74, 88, 104, 120])    # browser UI + OS bar
 
-    # 4. Hardware consistent with the OS.
-    cores = rng.choice(devices.HARDWARE[os_key]["cores"])
-    memory = rng.choice(devices.HARDWARE[os_key]["memory"])
+    # 4. Hardware consistent with the OS (or the specific phone).
+    if device:
+        cores, memory = device["cores"], device["memory"]
+    else:
+        cores = rng.choice(devices.HARDWARE[os_key]["cores"])
+        memory = rng.choice(devices.HARDWARE[os_key]["memory"])
 
-    # 5. GPU that actually exists on this OS.
-    webgl_vendor, webgl_renderer = rng.choice(devices.WEBGL[os_key])
+    # 5. GPU that actually exists on this OS (or ships in this phone).
+    if device:
+        webgl_vendor, webgl_renderer = device["webgl"]
+    else:
+        webgl_vendor, webgl_renderer = rng.choice(devices.WEBGL[os_key])
 
     # 6. Locale -> timezone + languages (optionally steered by the proxy).
     loc = _pick_locale(rng, locale, proxy)
@@ -108,9 +125,10 @@ def generate(
         cameras = rng.choice([0, 1, 1, 1, 2])
         microphones = rng.choice([0, 1, 1, 1, 2]) if cameras else rng.choice([0, 1])
 
+    ua_token = _android_token(device) if device else None
     return Fingerprint(
         os=os_key,
-        user_agent=_build_user_agent(os_key, chrome),
+        user_agent=_build_user_agent(os_key, chrome, ua_token),
         platform=devices.NAV_PLATFORM[os_key],
         ch_platform=devices.CH_PLATFORM[os_key],
         chrome_version=chrome,

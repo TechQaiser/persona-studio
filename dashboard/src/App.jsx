@@ -203,6 +203,23 @@ function uaFor(os, chrome = "128.0.0.0") {
   const mob = os === "Android" ? " Mobile" : "";
   return `Mozilla/5.0 (${tok}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome}${mob} Safari/537.36`;
 }
+// Human labels for session status and activity-log events.
+const SESS_LABEL = { ok: "Healthy", empty: "No cookies", stale: "Stale", expiring: "Expiring soon" };
+const ACT_LABEL = {
+  launch: "Launched", "session-end": "Session ended", warmup: "Warmed up",
+  trust: "Trust check", align: "Auto-adjusted", cookies: "Cookies imported",
+  session: "Session checked", created: "Created",
+};
+// Relative "time ago" from a unix timestamp (seconds), mirroring the server's.
+function relTime(ts) {
+  if (!ts) return "";
+  const secs = Math.max(0, Date.now() / 1000 - ts);
+  if (secs < 60) return "just now";
+  const m = secs / 60; if (m < 60) return `${Math.floor(m)}m ago`;
+  const h = m / 60; if (h < 24) return `${Math.floor(h)}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
 // Guess the WebGL vendor string from a renderer's GPU family (mirrors server).
 function vendorFor(renderer) {
   const r = (renderer || "").toLowerCase();
@@ -212,6 +229,21 @@ function vendorFor(renderer) {
   return "Google Inc.";
 }
 const CHROME_VERSIONS = ["125.0.0.0", "126.0.0.0", "127.0.0.0", "128.0.0.0"];
+
+// A fresh, coherent device identity for an OS — used when duplicating a profile
+// so the copy is a genuinely different machine, not a fingerprint twin of the
+// original. (In live mode the server does this; this mirrors it for demo mode.)
+function freshDevice(os, locale = "en-US") {
+  const rnd = (arr) => arr[Math.floor(Math.random() * arr.length)];
+  const chrome = rnd(CHROME_VERSIONS);
+  const gpu = rnd(GPUS[os]);
+  return {
+    browserVersion: chrome, userAgent: uaFor(os, chrome),
+    screen: rnd(SCREENS[os]), cores: rnd(CORES[os]), memory: rnd(RAM[os]),
+    webglVendor: vendorFor(gpu), webglRenderer: gpu,
+    locale, timezone: LOCALES[locale] || LOCALES["en-US"],
+  };
+}
 
 /* ---- toasts ------------------------------------------------------ *
  * A tiny module-level pub/sub so any code — even outside React — can call
@@ -373,9 +405,18 @@ export default function App() {
     setProfiles(ps => ps.map(x => x.id === id ? { ...x, status: x.status === "running" ? "stopped" : "running", lastActive: "now" } : x));
   };
   const clone = async (p) => {
-    const copy = { ...p, id: undefined, name: p.name + "-copy", status: "stopped", lastActive: "never", _new: true };
-    if (live) { try { await api.create(copy); await refresh(); } catch (e) { toast.error("Clone failed: " + e.message); } return; }
-    setProfiles(ps => [...ps, { ...copy, id: nid() }]);
+    // A duplicate keeps the settings but gets a *fresh* fingerprint, so the copy
+    // is a distinct device — not a fingerprint twin that could link the two.
+    if (live) {
+      try { const dup = await api.duplicate(p.id); await refresh(); toast.success(`Duplicated "${p.name}".`); return dup; }
+      catch (e) { toast.error("Duplicate failed: " + e.message); return; }
+    }
+    const copy = {
+      ...p, ...freshDevice(p.os, p.locale), id: nid(),
+      name: p.name + " copy", status: "stopped", lastActive: "never",
+    };
+    setProfiles(ps => [...ps, copy]);
+    toast.success(`Duplicated "${p.name}".`);
   };
   const remove = async (id) => {
     if (live) { try { await api.remove(id); await refresh(); } catch (e) { toast.error("Delete failed: " + e.message); } return; }
@@ -748,7 +789,7 @@ function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSe
                           {p.status === "running" ? <Square size={13} /> : <Play size={13} />}
                         </button>
                         <button title="Edit" onClick={() => setEditor({ ...p })}><Pencil size={13} /></button>
-                        <button title="Clone" onClick={() => clone(p)}><Copy size={13} /></button>
+                        <button title="Duplicate (fresh fingerprint)" onClick={() => clone(p)}><Copy size={13} /></button>
                         <button title="Delete" className="del" onClick={() => remove(p.id)}><Trash2 size={13} /></button>
                       </div>
                     </td>
@@ -1013,6 +1054,24 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
     } catch (e) { setProbe({ kind: "align", state: "error", data: e.message }); }
   };
 
+  // Session health + activity log. Both need a saved profile on a live server;
+  // the session check also opens the browser (like cookies), so it's gated the
+  // same way. Activity is just the stored log, so it loads whenever the tab opens.
+  const [sess, setSess] = useState(null);
+  const [sessBusy, setSessBusy] = useState(false);
+  const [activity, setActivity] = useState(null);   // null = not loaded yet
+  const loadActivity = async () => {
+    if (!cookiesReady) return;
+    try { setActivity((await api.activity(p.id)).activity || []); } catch { /* offline */ }
+  };
+  const checkSession = async () => {
+    setSessBusy(true);
+    try { setSess(await api.sessionCheck(p.id)); await loadActivity(); }
+    catch (e) { toast.error("Session check failed: " + e.message); }
+    setSessBusy(false);
+  };
+  useEffect(() => { if (tab === "session") loadActivity(); }, [tab, p.id]);   // eslint-disable-line
+
   // Warm-up: pick a per-vertical site set, run it now, or schedule it to
   // recur unattended. The schedule for this profile (if any) is loaded live.
   const [preset, setPreset] = useState("general");
@@ -1080,7 +1139,7 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
         </div>
 
         <div className="ps-tabs">
-          {["general", "fingerprint", "proxy", "advanced"].map(t => (
+          {["general", "fingerprint", "proxy", "advanced", "session"].map(t => (
             <button key={t} className={"ps-tab" + (tab === t ? " active" : "")} onClick={() => setTab(t)}>{t}</button>
           ))}
         </div>
@@ -1295,6 +1354,63 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
                 <div className="ps-hint"><Cookie size={12} /> {p._new
                   ? "Save this profile first, then you can move a session in or out."
                   : "Cookie transfer needs the engine running — start it with persona serve."}</div>
+              )}
+            </>
+          )}
+
+          {tab === "session" && (
+            <>
+              <SectionLabel icon={<Cookie size={13} />} text="Session health" />
+              {cookiesReady ? (
+                <>
+                  <button className="ps-btn primary sm" disabled={sessBusy} onClick={checkSession}>
+                    <ShieldCheck size={13} /> {sessBusy ? "Reading session…" : "Check session"}
+                  </button>
+                  {sess && (
+                    <div className={"ps-sess ps-sess-" + sess.status}>
+                      <div className="ps-sess-top">
+                        <span className={"ps-pill sess " + sess.status}>{SESS_LABEL[sess.status] || sess.status}</span>
+                        <span className="ps-mono dim">{sess.total} cookies · {sess.persistent} persistent · {sess.session} session</span>
+                      </div>
+                      {(sess.expired > 0 || sess.expiringSoon > 0) && (
+                        <div className="ps-sess-warn">
+                          {sess.expired > 0 && <span>{sess.expired} expired</span>}
+                          {sess.expiringSoon > 0 && <span>{sess.expiringSoon} expiring within {sess.soonDays}d</span>}
+                        </div>
+                      )}
+                      <div className="ps-sess-logins">
+                        {sess.logins.length
+                          ? <>Live logins: {sess.logins.map(s => <span key={s} className="ps-tag on">{s}</span>)}</>
+                          : <span className="dim">No known live logins detected.</span>}
+                      </div>
+                    </div>
+                  )}
+                  <div className="ps-hint"><Cookie size={12} /> Opens the profile headlessly and reads its real cookie jar — flags expired / soon-to-expire cookies and which accounts are still logged in. Stop the profile first.</div>
+                </>
+              ) : (
+                <div className="ps-hint"><Cookie size={12} /> {p._new
+                  ? "Save the profile first, then run a session check."
+                  : "Session check needs the engine running — start it with persona serve."}</div>
+              )}
+
+              <SectionLabel icon={<Activity size={13} />} text="Activity" />
+              {!cookiesReady ? (
+                <div className="ps-hint"><Clock size={12} /> The activity log records launches, warm-ups, trust runs and more once the profile is saved on a live server.</div>
+              ) : activity === null ? (
+                <div className="ps-hint"><Clock size={12} /> Loading…</div>
+              ) : activity.length === 0 ? (
+                <div className="ps-hint"><Clock size={12} /> Nothing yet — launch or warm up the profile and it'll show here.</div>
+              ) : (
+                <div className="ps-timeline">
+                  {activity.map((e, k) => (
+                    <div key={k} className="ps-tl-row">
+                      <span className="ps-tl-dot" />
+                      <span className="ps-tl-kind">{ACT_LABEL[e.kind] || e.kind}</span>
+                      {e.detail && <span className="ps-tl-detail">{e.detail}</span>}
+                      <span className="ps-tl-time">{relTime(e.at)}</span>
+                    </div>
+                  ))}
+                </div>
               )}
             </>
           )}
@@ -1558,6 +1674,8 @@ function HealthView({ profiles, live, refresh, setEditor }) {
         <HealthChip label="With proxy" value={`${s.withProxy ?? 0}/${s.total ?? 0}`} color={T.lilac} />
         <HealthChip label="Scheduled" value={s.scheduled ?? 0} color={T.violet} />
         <HealthChip label="Shared FP" value={s.colliding ?? 0} color={s.colliding ? T.amber : T.mint} />
+        {(() => { const bad = rows.filter(r => r.session && (r.session.status === "stale" || r.session.status === "expiring")).length;
+          return <HealthChip label="Session alerts" value={bad} color={bad ? T.amber : T.mint} />; })()}
         <HealthChip label="Needs attention" value={s.needsAttention ?? 0} color={s.needsAttention ? T.amber : T.mint} />
         <div style={{ flex: 1 }} />
         <button className="ps-btn ghost sm" onClick={load}><RefreshCw size={13} /> Refresh</button>
@@ -1569,8 +1687,8 @@ function HealthView({ profiles, live, refresh, setEditor }) {
           <table className="ps-table">
             <thead><tr>
               <th>Profile</th><th>Engine</th><th>Coherence</th><th>Proxy</th>
-              <th>Trust</th><th>Warm-up</th><th>Last active</th>
-              <th style={{ width: 150, textAlign: "right" }}>Actions</th>
+              <th>Trust</th><th>Session</th><th>Warm-up</th><th>Last active</th>
+              <th style={{ width: 180, textAlign: "right" }}>Actions</th>
             </tr></thead>
             <tbody>
               {rows.map((r, i) => (
@@ -1587,6 +1705,12 @@ function HealthView({ profiles, live, refresh, setEditor }) {
                     : <span style={{ color: T.amber, display: "inline-flex", gap: 5, alignItems: "center" }} title={(r.issues || []).join("; ")}><ShieldAlert size={13} /> {r.issues.length}</span>}</td>
                   <td className="ps-mono">{r.proxy?.set ? (r.proxy.country || r.proxy.type || "set") : <span className="dim">none</span>}</td>
                   <td><GradeBadge grade={r.trust?.grade} /></td>
+                  <td>{r.session
+                    ? <span className={"ps-pill sess " + r.session.status}
+                        title={(r.session.logins || []).length ? "Live: " + r.session.logins.join(", ") : "No known live logins"}>
+                        {SESS_LABEL[r.session.status] || r.session.status}
+                      </span>
+                    : <span className="dim">—</span>}</td>
                   <td className="ps-mono dim">{r.schedule
                     ? <span title={`${r.schedule.preset}, every ${r.schedule.everyHours}h`} style={{ color: r.schedule.enabled ? T.lilac : T.dim }}><Clock size={11} /> {r.schedule.everyHours}h</span>
                     : "—"}</td>
@@ -1600,6 +1724,10 @@ function HealthView({ profiles, live, refresh, setEditor }) {
                       <button title="Auto-adjust to grade A" className="run" disabled={!!busy[r.id] || r.status === "running"}
                         onClick={() => act(r.id, "Auto-adjust", () => api.align(r.id))}>
                         {busy[r.id] === "Auto-adjust" ? <RefreshCw size={13} className="ps-spin" /> : <Sparkles size={13} />}
+                      </button>
+                      <button title="Check session health" className="run" disabled={!!busy[r.id] || r.status === "running"}
+                        onClick={() => act(r.id, "Session check", () => api.sessionCheck(r.id))}>
+                        {busy[r.id] === "Session check" ? <RefreshCw size={13} className="ps-spin" /> : <Cookie size={13} />}
                       </button>
                     </div>
                   </td>
@@ -2306,6 +2434,23 @@ a { color: inherit; }
 .ps-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 20px; }
 .ps-pill.ok { color: ${T.mint}; background: ${T.mint}1a; }
 .ps-pill.warn { color: ${T.amber}; background: ${T.amber}1a; cursor: help; }
+.ps-pill.sess { cursor: help; }
+.ps-pill.sess.ok { color: ${T.mint}; background: ${T.mint}1a; }
+.ps-pill.sess.empty { color: ${T.dim}; background: ${T.surface2}; }
+.ps-pill.sess.stale { color: ${T.red}; background: ${T.red}1a; }
+.ps-pill.sess.expiring { color: ${T.amber}; background: ${T.amber}1a; }
+.ps-sess { margin: 10px 0; padding: 12px 14px; border: 1px solid ${T.line}; border-radius: 12px; background: ${T.surface}; display: grid; gap: 8px; }
+.ps-sess-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ps-sess-warn { display: flex; gap: 8px; flex-wrap: wrap; }
+.ps-sess-warn span { font-size: 11px; font-weight: 600; color: ${T.amber}; background: ${T.amber}1a; padding: 2px 8px; border-radius: 6px; }
+.ps-sess-logins { font-size: 12px; color: ${T.muted}; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ps-timeline { display: grid; gap: 2px; margin: 6px 0 2px; }
+.ps-tl-row { display: flex; align-items: center; gap: 9px; padding: 6px 2px; border-bottom: 1px solid ${T.line}; font-size: 12.5px; }
+.ps-tl-row:last-child { border-bottom: none; }
+.ps-tl-dot { width: 7px; height: 7px; border-radius: 50%; background: ${T.violet}; flex: none; }
+.ps-tl-kind { font-weight: 600; color: ${T.text}; }
+.ps-tl-detail { color: ${T.muted}; font-family: ui-monospace, monospace; font-size: 11.5px; }
+.ps-tl-time { margin-left: auto; color: ${T.dim}; font-size: 11px; white-space: nowrap; }
 .ps-actions { display: flex; gap: 5px; justify-content: flex-end; }
 .ps-actions button { width: 31px; height: 31px; border-radius: 8px; border: 1px solid ${T.line}; background: ${T.surface}; color: ${T.muted}; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: .14s; }
 .ps-actions button:hover { color: ${T.text}; background: ${T.surface2}; transform: translateY(-1px); }

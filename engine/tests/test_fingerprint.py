@@ -42,6 +42,30 @@ def test_mobile_flag():
     assert "Mobile" in fp.user_agent
 
 
+def test_mobile_ua_names_a_real_handset():
+    # An Android UA has to describe one specific phone the rest of the
+    # fingerprint agrees with — "Android <version>; <model>".
+    models = {d["model"] for d in devices.ANDROID_DEVICES}
+    for seed in range(60):
+        fp = generate(seed=seed, os="android")
+        assert "Android" in fp.user_agent
+        assert any(m in fp.user_agent for m in models), fp.user_agent
+
+
+def test_mobile_device_bundle_is_coherent():
+    # Every phone we assemble validates clean, and its GPU/screen/RAM come from
+    # one real device bundle (never mixed across handsets).
+    bundles = {(d["screen"], d["webgl"], d["cores"], d["memory"])
+               for d in devices.ANDROID_DEVICES}
+    for seed in range(60):
+        fp = generate(seed=seed, os="android")
+        assert validate(fp) == [], f"seed {seed}: {validate(fp)}"
+        key = ((fp.screen_width, fp.screen_height),
+               (fp.webgl_vendor, fp.webgl_renderer),
+               fp.hardware_concurrency, fp.device_memory)
+        assert key in bundles, f"seed {seed} mixed device parts: {key}"
+
+
 def test_proxy_country_steers_locale():
     proxy = Proxy(server="http://x:1", country="PK")
     fp = generate(seed=9, proxy=proxy)

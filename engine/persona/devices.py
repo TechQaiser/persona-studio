@@ -40,9 +40,15 @@ WEBGL = {
         ("Google Inc. (Intel)",
          "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL 4.6)"),
     ],
+    # Kept in sync with ANDROID_DEVICES below — a phone fingerprint draws its GPU
+    # from its device bundle, and this curated pool must recognise every one.
     "android": [
         ("Google Inc. (Qualcomm)", "ANGLE (Qualcomm, Adreno (TM) 660, OpenGL ES 3.2)"),
+        ("Google Inc. (Qualcomm)", "ANGLE (Qualcomm, Adreno (TM) 730, OpenGL ES 3.2)"),
         ("Google Inc. (ARM)", "ANGLE (ARM, Mali-G78, OpenGL ES 3.2)"),
+        ("Google Inc. (ARM)", "ANGLE (ARM, Mali-G710, OpenGL ES 3.2)"),
+        ("Google Inc. (ARM)", "ANGLE (ARM, Mali-G715, OpenGL ES 3.2)"),
+        ("Google Inc. (ARM)", "ANGLE (ARM, Mali-G77 MC9, OpenGL ES 3.2)"),
     ],
 }
 
@@ -160,6 +166,27 @@ FONTS = {
         "Roboto", "Roboto Condensed", "Roboto Mono",
     ],
 }
+
+# Real Android phones as coherent bundles. A mobile fingerprint is only
+# convincing when the model name in the User-Agent, the Android version, the
+# screen size, the GPU and the RAM all describe the *same* handset — a "Pixel 7"
+# UA reporting an Adreno GPU on a 360x640 screen is an instant tell. The
+# generator picks one of these whole, rather than mixing parts across phones.
+# (screen is CSS pixels — what a phone browser reports for screen.width/height.)
+ANDROID_DEVICES = [
+    {"model": "Pixel 7", "android": "13", "screen": (412, 915), "cores": 8, "memory": 8,
+     "webgl": ("Google Inc. (ARM)", "ANGLE (ARM, Mali-G710, OpenGL ES 3.2)")},
+    {"model": "Pixel 8", "android": "14", "screen": (412, 915), "cores": 9, "memory": 8,
+     "webgl": ("Google Inc. (ARM)", "ANGLE (ARM, Mali-G715, OpenGL ES 3.2)")},
+    {"model": "Pixel 6", "android": "13", "screen": (393, 851), "cores": 8, "memory": 8,
+     "webgl": ("Google Inc. (ARM)", "ANGLE (ARM, Mali-G78, OpenGL ES 3.2)")},
+    {"model": "SM-G991B", "android": "13", "screen": (360, 800), "cores": 8, "memory": 8,
+     "webgl": ("Google Inc. (ARM)", "ANGLE (ARM, Mali-G78, OpenGL ES 3.2)")},        # Galaxy S21
+    {"model": "SM-S908B", "android": "14", "screen": (384, 854), "cores": 8, "memory": 12,
+     "webgl": ("Google Inc. (Qualcomm)", "ANGLE (Qualcomm, Adreno (TM) 730, OpenGL ES 3.2)")},  # Galaxy S22 Ultra
+    {"model": "M2101K6G", "android": "13", "screen": (393, 873), "cores": 8, "memory": 6,
+     "webgl": ("Google Inc. (ARM)", "ANGLE (ARM, Mali-G77 MC9, OpenGL ES 3.2)")},    # Redmi Note 10
+]
 
 # The four desktop-capable operating systems we generate by default.
 DESKTOP_OS = ["windows", "macos", "linux"]

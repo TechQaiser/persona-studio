@@ -193,7 +193,8 @@ def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: 
         "viewport": {"width": fp.viewport_width, "height": fp.viewport_height},
         "screen": {"width": fp.screen_width, "height": fp.screen_height},
         "is_mobile": fp.is_mobile,
-        "device_scale_factor": 2 if fp.is_mobile else 1,
+        "has_touch": fp.is_mobile,
+        "device_scale_factor": 2.625 if fp.is_mobile else 1,
         "extra_http_headers": {
             "sec-ch-ua": fp_mod.sec_ch_ua(fp),
             "sec-ch-ua-platform": fp.ch_platform,

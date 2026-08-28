@@ -5,6 +5,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Mobile (Android) profiles**: fingerprint generation now assembles a whole
+  handset — the model in the User-Agent (`Pixel 7`, `SM-G991B`, …), the Android
+  version, the GPU, screen and RAM all describe one real phone rather than mixed
+  parts. Launch adds touch support and a phone device-scale factor. Android was
+  already selectable in the dashboard; it's now coherent end-to-end.
+- **Session health** (`persona session <ref>` / `POST /api/profiles/{id}/session`):
+  reads the profile's real cookie jar and reports how many cookies are expired or
+  expiring within a week, and which services still have a live login (Facebook,
+  Instagram, Google, X, LinkedIn, …). Surfaced as a badge and per-row check on the
+  **Health** page, and a **Session** tab in the profile editor. Cached as
+  `_session` so the Health grid shows it without re-opening every profile;
+  stale / expiring sessions now count toward "needs attention".
+- **Duplicate as template** (`POST /api/profiles/{id}/duplicate`, the ⧉ card
+  action): clones a profile's settings (proxy, folder, tags, notes, engine,
+  startup URLs, OS + locale) but re-rolls the fingerprint, so the copy is a
+  genuinely different device instead of a fingerprint twin that a site could link
+  back to the original.
+- **Per-profile activity log** (`GET /api/profiles/{id}/activity`, editor
+  **Session** tab): records launches, session ends, warm-ups, trust runs,
+  auto-adjusts, cookie imports and session checks as a timeline.
 - **Folders manager** (dashboard **Folders** tab): create, rename and delete
   folders, each shown as a card with live profile / running / coherent counts and
   one-click open. Folders are persisted server-side (`GET /api/config` →

@@ -15,6 +15,7 @@ Command-line interface for Persona.
     persona collisions [--json]                   (profiles that share a fingerprint)
     persona check <name|id>                       (validate fingerprint coherence)
     persona trust <name|id>                       (score it like a fingerprinter would)
+    persona session <name|id>                     (session health: expired cookies + live logins)
     persona proxy test <name|id>                  (exit IP, country + WebRTC leaks)
     persona dns <name|id>                         (do DNS lookups leak past the proxy?)
     persona tls <name|id>                         (TLS/JA3 handshake — the pre-JS layer)
@@ -390,6 +391,32 @@ def cmd_dns(args, store: ProfileStore) -> int:
         print(f"  resolvers    {len(res['resolvers'])} in {', '.join(res['countries'])}")
     _print_checks(res["checks"])
     return 0 if res["ok"] else 1
+
+
+def cmd_session(args, store: ProfileStore) -> int:
+    prof = _resolve_or_fail(args, store)
+    if not prof:
+        return 1
+    from . import session as session_mod
+    if not args.json:
+        print(_c(f"Reading '{prof.name}' session (opens it headlessly)...", C.CYN))
+    rep = session_mod.check(prof, store, engine=args.engine)
+    if args.json:
+        print(json.dumps(rep))
+        return 0 if rep["status"] in ("ok", "empty") else 1
+    label = {"ok": C.GRN, "empty": C.DIM, "stale": C.RED, "expiring": C.YEL}
+    print(_c(f"\n  Session: {rep['status']}", label.get(rep["status"], C.B)) +
+          _c(f"   {rep['total']} cookies "
+             f"({rep['persistent']} persistent, {rep['session']} session)", C.DIM))
+    if rep["expired"] or rep["expiringSoon"]:
+        print(_c(f"  {rep['expired']} expired, {rep['expiringSoon']} "
+                 f"expiring within {rep['soonDays']} days", C.YEL))
+    if rep["logins"]:
+        print(_c("  Live logins: ", C.B) + _c(", ".join(rep["logins"]), C.GRN))
+    else:
+        print(_c("  No known live logins detected.", C.DIM))
+    print()
+    return 0 if rep["status"] in ("ok", "empty") else 1
 
 
 def cmd_trust(args, store: ProfileStore) -> int:
@@ -908,6 +935,13 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--engine", help="Inspect with a different engine than the profile's")
     c.add_argument("--json", action="store_true", help="Print the raw result as JSON")
     c.set_defaults(func=cmd_trust)
+
+    c = sub.add_parser("session",
+                       help="Check session health — expired/expiring cookies and live logins")
+    c.add_argument("ref")
+    c.add_argument("--engine", help="Read with a different engine than the profile's")
+    c.add_argument("--json", action="store_true", help="Print the raw result as JSON")
+    c.set_defaults(func=cmd_session)
 
     c = sub.add_parser("align",
                        help="Auto-adjust: match the profile to what its browser really shows")

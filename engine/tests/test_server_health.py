@@ -98,6 +98,34 @@ def test_collisions_endpoint_and_health_flag(client):
     assert rows["Solo"]["collides"] is False
 
 
+def test_duplicate_profile_is_a_distinct_device(client):
+    orig = _make_profile(client, "Origin", folder="Ads", notes="keep me")
+    dup = client.post(f"/api/profiles/{orig['id']}/duplicate").json()
+
+    assert dup["id"] != orig["id"]
+    assert dup["name"] == "Origin copy"
+    assert dup["folder"] == "Ads" and dup["notes"] == "keep me"   # settings carried over
+    assert dup.get("seed") and dup["seed"] != orig.get("seed")    # fresh fingerprint seed
+
+    # Both now exist, and they must NOT be a fingerprint collision.
+    assert len(client.get("/api/profiles").json()) == 2
+    groups = client.get("/api/profiles/collisions").json()["groups"]
+    assert groups == []
+
+
+def test_duplicate_unknown_profile_404(client):
+    assert client.post("/api/profiles/nope/duplicate").status_code == 404
+
+
+def test_activity_log_records_events(client):
+    prof = _make_profile(client, "Logged")
+    # A duplicate logs a "created" event on the new profile.
+    dup = client.post(f"/api/profiles/{prof['id']}/duplicate").json()
+    events = client.get(f"/api/profiles/{dup['id']}/activity").json()["activity"]
+    assert events and events[0]["kind"] == "created"
+    assert "duplicated from" in events[0]["detail"]
+
+
 def test_config_exposes_folders_root_and_version(client):
     cfg = client.get("/api/config").json()
     assert "default_engine" in cfg

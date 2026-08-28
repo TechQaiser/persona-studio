@@ -77,6 +77,13 @@ export const api = {
   addSchedule: (s) => req("POST", "/api/schedules", s),
   updateSchedule: (id, patch) => req("PUT", `/api/schedules/${id}`, patch),
   deleteSchedule: (id) => req("DELETE", `/api/schedules/${id}`),
+  // Session health: expired/expiring cookies and which logins are still live.
+  // Opens the profile headlessly, so it's slow like the cookie/trust calls.
+  sessionCheck: (id) => req("POST", `/api/profiles/${id}/session`),
+  // Duplicate a profile as a template: same settings, a fresh coherent fingerprint.
+  duplicate: (id) => req("POST", `/api/profiles/${id}/duplicate`),
+  // Per-profile activity log (launches, warm-ups, trust runs, …), newest first.
+  activity: (id) => req("GET", `/api/profiles/${id}/activity`),
   // Health overview: coherence, proxy, cached trust grade and schedule per profile.
   health: () => req("GET", "/api/profiles/health"),
   // Fingerprint collisions: which profiles look like the same device.
