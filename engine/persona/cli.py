@@ -861,7 +861,7 @@ def cmd_import_from(args, store: ProfileStore) -> int:
 
 def cmd_serve(args, store: ProfileStore) -> int:
     from .server import serve
-    serve(host=args.host, port=args.port, data_dir=args.data_dir)
+    serve(host=args.host, port=args.port, data_dir=args.data_dir, dashboard_dir=args.dashboard)
     return 0
 
 
@@ -1183,6 +1183,8 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("serve", help="Run the HTTP API for the dashboard")
     c.add_argument("--host", default="127.0.0.1")
     c.add_argument("--port", type=int, default=8787)
+    c.add_argument("--dashboard", metavar="DIR",
+                   help="Also serve a built dashboard (dashboard/dist) on the same port")
     c.set_defaults(func=cmd_serve)
 
     return p

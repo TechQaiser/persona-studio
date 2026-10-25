@@ -4,6 +4,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## 2026-10-25
 
+### Added
+- **Windows app** (`packaging/PersonaStudio.spec`, `persona/app.py`): one
+  `PersonaStudio.exe` that runs the engine and serves the built dashboard on
+  http://localhost:8787, with no Python or Node needed. It downloads Chromium on
+  first run and bundles Playwright, Patchright and CloakBrowser. With arguments
+  it acts as the `persona` CLI. `persona serve --dashboard dashboard/dist` does
+  the same from source. Version is now 0.2.0.
+
+### Fixed
+- A profile created through the API or an import without `tags` blanked the
+  whole dashboard. The server now fills in missing fields, and the list
+  tolerates old records.
+
 ### Security
 - **Local API locked down.** `persona serve` used to accept CORS from any origin
   without auth, so any web page open in the user's browser could launch profiles

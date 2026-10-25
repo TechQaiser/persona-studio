@@ -10,7 +10,12 @@
  *  Override the API location with a VITE_API_URL env var if needed.
  * ------------------------------------------------------------------ */
 
-const BASE = import.meta.env.VITE_API_URL || "http://localhost:8787";
+// The dev server (5173) and `vite preview` (4173) talk to the engine on 8787;
+// a build served by the engine itself (the packaged app, `persona serve
+// --dashboard`) talks to its own origin.
+const BASE = import.meta.env.VITE_API_URL ||
+  (["5173", "4173"].includes(window.location.port) || window.location.protocol === "file:"
+    ? "http://localhost:8787" : window.location.origin);
 
 // The engine issues a fresh API token each time it starts and only hands it to
 // the dashboard's own origin. Fetch it lazily; refetch once if the engine

@@ -446,7 +446,7 @@ export default function App() {
     profiles.filter(p =>
       (folder === "All profiles" || p.folder === folder) &&
       (p.name.toLowerCase().includes(query.toLowerCase()) ||
-       p.tags.some(t => t.includes(query.toLowerCase()))) &&
+       (p.tags || []).some(t => t.includes(query.toLowerCase()))) &&
       (!filters.status || p.status === filters.status) &&
       (!filters.engine || (p.engine || "playwright") === filters.engine) &&
       (!filters.os || p.os === filters.os) &&
@@ -836,7 +836,7 @@ function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSe
                             <span title={p.launchError}
                               style={{ marginLeft: 8, fontSize: 10, color: T.red, border: `1px solid ${T.red}`, borderRadius: 4, padding: "1px 5px", verticalAlign: "middle", cursor: "help" }}>
                               launch failed</span>)}</div>
-                          <div className="ps-tags">{p.tags.map(t => (
+                          <div className="ps-tags">{(p.tags || []).map(t => (
                             <span key={t} className={"ps-tag clickable" + (filters.tag === t ? " on" : "")}
                               title={filters.tag === t ? "Clear tag filter" : `Filter by "${t}"`}
                               onClick={() => setFilter("tag", t)}>{t}</span>
@@ -1259,7 +1259,7 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
                   </select>
                 </Field>
                 <Field label="Tags (comma separated)">
-                  <input className="ps-in" value={p.tags.join(", ")} onChange={e => set({ tags: e.target.value.split(",").map(s => s.trim()).filter(Boolean) })} placeholder="client-a, priority" />
+                  <input className="ps-in" value={(p.tags || []).join(", ")} onChange={e => set({ tags: e.target.value.split(",").map(s => s.trim()).filter(Boolean) })} placeholder="client-a, priority" />
                 </Field>
               </Row>
               <Field label="Notes"><textarea className="ps-in" rows={3} value={p.notes} onChange={e => set({ notes: e.target.value })} placeholder="Anything worth remembering about this account…" /></Field>
@@ -2488,7 +2488,7 @@ function SettingsView({ live, config, engines, defaultEngine, onChangeEngine, pa
           <div className="ps-set-h"><Info size={15} color={T.violet} /> About</div>
           <div className="ps-set-row">
             <div className="ps-set-label">Persona Studio</div>
-            <span className="ps-pill" style={{ background: T.violetDim, color: T.lilac }}>v{config?.version || "0.1.0"}</span>
+            <span className="ps-pill" style={{ background: T.violetDim, color: T.lilac }}>v{config?.version || "0.2.0"}</span>
           </div>
           <div className="ps-set-note" style={{ marginTop: 6 }}>Open-source, self-hosted anti-detect browser &amp; profile manager. {live ? "Engine connected." : "Running in demo mode — start persona serve to go live."}</div>
         </div>

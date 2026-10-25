@@ -20,7 +20,7 @@ from .models import Fingerprint, Profile, Proxy
 from .fingerprint import generate, validate, sec_ch_ua
 from .store import ProfileStore
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "Fingerprint",

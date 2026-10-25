@@ -38,6 +38,8 @@ from typing import Optional
 from . import cookies as cookies_mod
 from . import devices
 from . import locks
+from . import __version__
+from .runtime import bundled_dashboard, persona_cmd
 from .fingerprint import generate, validate
 from .history import normalize_storage
 from .models import Fingerprint, Profile, Proxy
@@ -435,7 +437,8 @@ def _write_token_file(root: Path, token: str) -> None:
 def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
                api_token: Optional[str] = None,
                extra_origins: Optional[list[str]] = None,
-               extra_hosts: Optional[list[str]] = None):
+               extra_hosts: Optional[list[str]] = None,
+               dashboard_dir: Optional[str] = None):
     _require_fastapi()
     from fastapi import FastAPI, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
@@ -449,7 +452,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
     running: dict[str, subprocess.Popen] = {}
     attached: dict[str, dict] = {}   # pid -> CDP connection info while attached
 
-    app = FastAPI(title="Persona API", version="0.1.0")
+    app = FastAPI(title="Persona API", version=__version__)
 
     # Local-API hardening. Anything that can reach localhost — including any web
     # page open in the user's everyday browser — could otherwise launch profiles
@@ -461,6 +464,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
     _write_token_file(engine_store.root, token)
     origins = allowed_origins(extra_origins)
     hosts = allowed_hosts(extra_hosts)
+    dash_dir = Path(dashboard_dir) if dashboard_dir and (Path(dashboard_dir) / "index.html").is_file() else None
 
     @app.middleware("http")
     async def local_api_guard(request, call_next):
@@ -470,6 +474,8 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         path = request.url.path
         if request.method == "OPTIONS" or path in OPEN_PATHS:
             return await call_next(request)
+        if dash_dir is not None and not path.startswith("/api/"):
+            return await call_next(request)    # the dashboard's own static files
         if path == "/api/token":
             # A browser always sends Origin on a cross-origin fetch; no Origin
             # means curl/scripts on this machine, which could read the file anyway.
@@ -520,6 +526,10 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         # Attach live run state. Coherence is computed by the dashboard itself
         # (its meter mirrors the validator), so we don't duplicate it here.
         d = dict(d)
+        # Profiles saved by older versions or other tools may miss list fields.
+        d["tags"] = d.get("tags") or []
+        d.setdefault("folder", "Unfiled")
+        d.setdefault("notes", "")
         running_now = is_running(d["id"])
         d["status"] = "running" if running_now else "stopped"
         d["lastActive"] = "now" if running_now else _rel_time(d.get("_last_active"))
@@ -562,7 +572,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
 
     @app.get("/api/health")
     def health():
-        return {"ok": True, "version": "0.1.0"}
+        return {"ok": True, "version": __version__}
 
     @app.get("/api/token")
     def api_token_route():
@@ -592,7 +602,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
             "default_engine": engine_store.get_default_engine(),
             "folders": _folder_list(),
             "root": str(engine_store.root),
-            "version": "0.1.0",
+            "version": __version__,
             "history_keep": engine_store.get_history_keep(),
         }
 
@@ -664,6 +674,12 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         profile.pop("_new", None)
         if not profile.get("engine"):
             profile["engine"] = engine_store.get_default_engine()
+        # A profile posted by a script or an importer may carry only a few
+        # fields; fill the rest from a coherent device so the dashboard (which
+        # reads every field) can always render it.
+        full = to_dashboard_profile(to_engine_profile({**profile, "id": profile.get("id") or "new"}))
+        full["folder"] = "Unfiled"
+        profile = {**full, **{k: v for k, v in profile.items() if v is not None}}
         _remember_engine(profile)
         saved = dash.save(profile)
         return decorate(saved)
@@ -701,7 +717,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         log_path = _launch_log(pid)
         log = open(log_path, "w", encoding="utf-8", errors="replace")
         proc = subprocess.Popen(
-            [sys.executable, "-u", "-m", "persona", "--data-dir", str(engine_store.root),
+            [*persona_cmd(unbuffered=True), "--data-dir", str(engine_store.root),
              "launch", pid],
             stdout=log, stderr=subprocess.STDOUT,
         )
@@ -779,7 +795,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         still has a result worth showing.
         """
         proc = subprocess.run(
-            [sys.executable, "-m", "persona", "--data-dir", str(engine_store.root), *cli_args],
+            [*persona_cmd(), "--data-dir", str(engine_store.root), *cli_args],
             capture_output=True, text=True,
         )
         if proc.returncode != 0 and not (allow_fail and proc.stdout.strip()):
@@ -914,7 +930,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
                                      f"to — use one of: {', '.join(CHROMIUM_ENGINES)}")
         _materialise(d)
         port = _free_port()
-        cli = [sys.executable, "-m", "persona", "--data-dir", str(engine_store.root),
+        cli = [*persona_cmd(), "--data-dir", str(engine_store.root),
                "attach", pid, "--port", str(port)]
         if (body or {}).get("headless"):
             cli.append("--headless")
@@ -936,7 +952,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         d = _prepare(pid)
         body = body or {}
         minutes = float(body.get("minutes", 5))
-        cli = [sys.executable, "-m", "persona", "--data-dir", str(engine_store.root),
+        cli = [*persona_cmd(), "--data-dir", str(engine_store.root),
                "warmup", pid, "--minutes", str(minutes), "--headless"]
         if body.get("preset"):
             cli += ["--preset", str(body["preset"])]
@@ -1258,7 +1274,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
     def _spawn_warmup(pid: str, minutes: float, preset: Optional[str]) -> None:
         """Launch a headless warm-up in the background (shared by the endpoint
         and the scheduler). The profile shows as running until it finishes."""
-        cli = [sys.executable, "-m", "persona", "--data-dir", str(engine_store.root),
+        cli = [*persona_cmd(), "--data-dir", str(engine_store.root),
                "warmup", pid, "--minutes", str(minutes), "--headless"]
         if preset:
             cli += ["--preset", str(preset)]
@@ -1411,17 +1427,29 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         def _stop_scheduler():
             stop.set()
 
+
+    if dash_dir is not None:
+        # Last, so every /api route above wins over the static files.
+        from fastapi.staticfiles import StaticFiles
+        app.mount("/", StaticFiles(directory=str(dash_dir), html=True), name="dashboard")
     return app
 
 
-def serve(host: str = "127.0.0.1", port: int = 8787, data_dir: Optional[str] = None):
-    """Start the API server (blocking)."""
+def serve(host: str = "127.0.0.1", port: int = 8787, data_dir: Optional[str] = None,
+          dashboard_dir: Optional[str] = None):
+    """Start the API server (blocking). With a built dashboard (``dashboard_dir``,
+    or the one bundled in the packaged app) it's served on the same port."""
     _require_fastapi()
     import uvicorn
     # Binding a specific non-loopback address means clients will send it as Host.
     extra = [host] if host not in ("0.0.0.0", "::", "") else []
-    app = create_app(data_dir, extra_hosts=extra)
+    dashboard_dir = dashboard_dir or bundled_dashboard()
+    own = [f"http://{h}:{port}" for h in ("localhost", "127.0.0.1")] if dashboard_dir else []
+    app = create_app(data_dir, extra_hosts=extra, extra_origins=own,
+                     dashboard_dir=str(dashboard_dir) if dashboard_dir else None)
     root = ProfileStore(data_dir).root
     print(f"Persona API on http://{host}:{port}  (data dir: {root})")
+    if dashboard_dir:
+        print(f"Dashboard on http://localhost:{port}/")
     print(f"API token (send as {TOKEN_HEADER}) written to {root / TOKEN_FILE}")
     uvicorn.run(app, host=host, port=port, log_level="info")
