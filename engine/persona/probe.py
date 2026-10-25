@@ -27,6 +27,8 @@ import time
 from typing import Optional
 
 from .drivers import session
+from .fingerprint import navigator_device_memory, pixel_ratio
+from .geo import launch_geo
 from .models import Profile
 from .store import ProfileStore
 
@@ -157,6 +159,7 @@ def check_proxy(profile: Profile, store: ProfileStore,
                 "checks": leaks["checks"] + dns["checks"] + tls["checks"]}
 
     fp = profile.fingerprint
+    shown_tz = _launch_tz(profile, engine or profile.engine or "playwright") or fp.timezone
     checks = [_check("Traffic reaches the internet", True,
                      f"exit IP {info['ip']}" + (f" · {info['city']}" if info.get("city") else ""))]
 
@@ -172,8 +175,8 @@ def check_proxy(profile: Profile, store: ProfileStore,
 
     if info.get("timezone"):
         checks.append(_check(
-            "Timezone matches the exit location", info["timezone"] == fp.timezone,
-            f"profile says {fp.timezone}, the IP looks like {info['timezone']}"))
+            "Timezone matches the exit location", info["timezone"] == shown_tz,
+            f"the browser shows {shown_tz}, the IP looks like {info['timezone']}"))
 
     checks += leaks["checks"]
     checks += dns["checks"]
@@ -465,6 +468,7 @@ async (probe) => {
   out.memory = navigator.deviceMemory;
   out.screenW = screen.width;
   out.screenH = screen.height;
+  out.dpr = window.devicePixelRatio;
   out.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   try {
@@ -586,9 +590,12 @@ def _observe(profile: Profile, store: ProfileStore, engine: Optional[str] = None
     return seen
 
 
-def _grade(fp, seen: dict, engine_name: str) -> dict:
+def _grade(fp, seen: dict, engine_name: str, expected_tz: Optional[str] = None) -> dict:
     """Score an observation against a fingerprint. Pure — no browser — so the
-    aligner can grade a would-be fingerprint against the same observation."""
+    aligner can grade a would-be fingerprint against the same observation.
+    ``expected_tz`` is the zone the launch presented (the proxy exit IP's when
+    it resolved); it defaults to the profile's stored timezone."""
+    expected_tz = expected_tz or fp.timezone
     checks = [
         _check("navigator.webdriver is false", seen["webdriver"] is False,
                f"reads {seen['webdriver']!r}"),
@@ -606,10 +613,11 @@ def _grade(fp, seen: dict, engine_name: str) -> dict:
                f"expected {fp.languages}, got {seen['languages']}"),
         _check("CPU cores match", seen["cores"] == fp.hardware_concurrency,
                f"expected {fp.hardware_concurrency}, got {seen['cores']}"),
-        _check("Device memory matches", seen["memory"] == fp.device_memory,
-               f"expected {fp.device_memory}, got {seen['memory']}"),
-        _check("Timezone matches the locale", seen["timezone"] == fp.timezone,
-               f"expected {fp.timezone}, got {seen['timezone']}"),
+        _check("Device memory matches", seen["memory"] == navigator_device_memory(fp.device_memory),
+               f"expected {navigator_device_memory(fp.device_memory)}, got {seen['memory']}"),
+        _check("Timezone matches the IP location" if expected_tz != fp.timezone
+               else "Timezone matches the locale", seen["timezone"] == expected_tz,
+               f"expected {expected_tz}, got {seen['timezone']}"),
         _check("Patched functions still look native", seen["toStringNative"],
                "toString() on a patched function must read '[native code]'"),
         _check("permissions.query agrees with Notification.permission",
@@ -617,6 +625,10 @@ def _grade(fp, seen: dict, engine_name: str) -> dict:
         _check("Canvas reads the same twice", bool(seen.get("canvasStable")),
                "noise that changes between reads is a detection signal"),
     ]
+    if seen.get("dpr") is not None:
+        want = pixel_ratio(fp)
+        checks.append(_check("Pixel ratio matches the device", abs(seen["dpr"] - want) < 1e-6,
+                             f"expected {want:g}, got {seen['dpr']:g}"))
 
     # WebGL and font/media spoofing only apply to the Chromium engines — Camoufox
     # brings its own, so a mismatch there isn't a fault of this profile.
@@ -665,7 +677,15 @@ def trust_report(profile: Profile, store: ProfileStore,
     """
     seen = _observe(profile, store, engine)
     engine_name = engine or profile.engine or "playwright"
-    return _grade(profile.fingerprint, seen, engine_name)
+    return _grade(profile.fingerprint, seen, engine_name, _launch_tz(profile, engine_name))
+
+
+def _launch_tz(profile: Profile, engine_name: str) -> Optional[str]:
+    """The timezone the launch presented: the exit IP's (cached from the launch
+    moments ago) — except Camoufox, which resolves its own via geoip."""
+    if engine_name == "camoufox" or not profile.proxy:
+        return None
+    return launch_geo(profile)["timezone"]
 
 
 # --------------------------------------------------------------------------
@@ -727,7 +747,7 @@ def align_to_reality(profile: Profile, store: ProfileStore,
     seen = _observe(profile, store, engine, font_candidates=all_fonts)
     fp = profile.fingerprint
     engine_name = engine or profile.engine or "playwright"
-    before = _grade(fp, seen, engine_name)
+    before = _grade(fp, seen, engine_name, _launch_tz(profile, engine_name))
 
     changed: list[str] = []
 
@@ -752,7 +772,10 @@ def align_to_reality(profile: Profile, store: ProfileStore,
 
     # 2. Hardware, straight from the machine.
     apply("hardware_concurrency", seen.get("cores"), "cores")
-    apply("device_memory", seen.get("memory"), "memory")
+    # deviceMemory is RAM rounded down to a power of two (max 8): only correct
+    # the RAM when what Chrome would present from it disagrees with what it did.
+    if seen.get("memory") is not None and navigator_device_memory(fp.device_memory) != seen["memory"]:
+        apply("device_memory", seen["memory"], "memory")
     if seen.get("webglRenderer"):
         apply("webgl_renderer", seen["webglRenderer"], "webglRenderer")
         fp.webgl_vendor = seen.get("webglVendor") or _vendor_from_renderer(seen["webglRenderer"])
@@ -762,6 +785,9 @@ def align_to_reality(profile: Profile, store: ProfileStore,
             fp.viewport_width = min(fp.viewport_width or fp.screen_width, fp.screen_width)
             fp.viewport_height = min(fp.viewport_height or fp.screen_height, fp.screen_height)
             changed.append("screen")
+    if seen.get("dpr") and abs(seen["dpr"] - pixel_ratio(fp)) > 1e-6:
+        fp.device_scale_factor = float(seen["dpr"])
+        changed.append("dpr")
 
     # 3. Media + languages, as reported.
     apply("cameras", seen.get("cameras"), "cameras")
@@ -776,6 +802,12 @@ def align_to_reality(profile: Profile, store: ProfileStore,
     #     locale whose canonical zone is that timezone exists, so the profile stays
     #     coherent (locale still implies its timezone).
     tz = seen.get("timezone")
+    launch_tz = _launch_tz(profile, engine_name)
+    if tz and tz == launch_tz and tz != fp.timezone:
+        # The launch set this from the proxy's exit IP on purpose. Writing it
+        # back would also rewrite the locale (and languages) to that zone's —
+        # changing an account's language is a signal of its own.
+        tz = None
     if tz:
         loc = next((l for l, (z, _lg) in _devices.LOCALES.items() if z == tz), None)
         if loc:
@@ -799,7 +831,7 @@ def align_to_reality(profile: Profile, store: ProfileStore,
     store.save(profile)
     # The user-agent is fed to the engine at launch, so it will report the new
     # value next time — grade against that, not the stale observed UA.
-    after = _grade(fp, {**seen, "userAgent": fp.user_agent}, engine_name)
+    after = _grade(fp, {**seen, "userAgent": fp.user_agent}, engine_name, _launch_tz(profile, engine_name))
 
     keep = ("score", "grade", "passed", "total")
     return {

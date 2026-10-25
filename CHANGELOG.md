@@ -4,7 +4,81 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Security
+- **Local API locked down.** `persona serve` used to accept CORS from any origin
+  without auth, so any web page open in the user's browser could launch profiles
+  or read their cookies through `localhost:8787`. It now requires a per-start
+  `X-Persona-Token` (written to `<data-dir>/api-token`, given via `/api/token`
+  only to the dashboard's origins). CORS is restricted to the dashboard, and
+  non-loopback `Host` headers are rejected to block DNS rebinding.
+  `/api/health` stays open. The dashboard picks up the token automatically.
+
+- **DNS lockdown at launch.** With a proxy, Chromium engines now start with
+  `--host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE <proxy host>, EXCLUDE localhost"`,
+  so prefetching, WebRTC STUN names and the like can't ask the real ISP's
+  resolver. Before, DNS leaks were only *detected* (`persona dns`), never prevented.
+
+### Fixed
+- **Same device on every launch (Camoufox).** Camoufox salted each launch
+  randomly, so a profile came up as a new device every session (a different
+  screen each time in testing). Each profile's Camoufox fingerprint is now
+  generated once and pinned in its user-data dir
+  (`.persona-camoufox-fingerprint.json`). Backup/restore carries the pin along,
+  and "duplicate as template" gets a fresh one. Canvas still varies per session
+  there, because Firefox's own baseline fingerprinting protection does that for
+  every real Firefox user.
+- **CloakBrowser presents Persona's fingerprint.** Hardware cores, RAM, screen,
+  GPU vendor/renderer and platform are now passed as `--fingerprint-*` flags, and
+  the seed comes from the profile (a profile Cloak already opened keeps its
+  existing seed). The UA is no longer forced, so UA and Client Hints both come
+  from the binary and agree. Before, Cloak showed `Chrome/128` in the UA but 146
+  in `sec-ch-ua`.
+- **`navigator.deviceMemory` was impossible.** Profiles reported raw RAM (16, 32,
+  6, 12); Chrome only ever reports a power of two capped at 8. Fixed in the
+  stealth script, Cloak flags, the trust check and auto-adjust.
+- **Chrome version follows the engine.** At launch, a profile's UA moves to the
+  engine's real Chromium major (Playwright 151, Cloak 146 today) and the
+  dashboard copy follows. A UA older than the engine is caught by feature
+  detection. Default versions for new profiles moved from 125–128 to 148–151.
+- **`navigator.userAgentData` on Playwright/Patchright** reported
+  `HeadlessChrome`/`Chromium` with no "Google Chrome", which contradicted the UA
+  and `sec-ch-ua`. Now set through CDP `Emulation.setUserAgentOverride` with full
+  metadata (brands, full version, platform version, architecture, model), so JS
+  and every Client Hints header agree.
+- Dashboard: `api.health` was defined twice, so the startup liveness probe was
+  actually calling `/api/profiles/health`. The probe is now `api.ping()`.
+
 ### Added
+- **devicePixelRatio as part of the device.** Macs are 2, phones carry their
+  panel's exact ratio (Pixel 7 2.625, Galaxy S21 3, …), and Windows 1536x864 is
+  1.25 (a 1920x1080 laptop at 125%). Before, every desktop was 1, so every macOS
+  profile was a tell. `validate()` flags impossible ratios, and the trust check
+  and auto-adjust read the real one. Old profiles derive it automatically.
+  Deliberately *not* GoLogin's "+0.00000001" trick: a real Retina Mac reports
+  exactly 2.
+- **Timezone + geolocation from the proxy's exit IP** (`persona/geo.py`). At
+  launch the exit IP is looked up *through the proxy*, and the browser presents
+  that IP's timezone and city. Rotating/residential pools no longer contradict
+  the stored zone. Geolocation is a per-profile spot within a few km of the city,
+  stable across launches. Before, every profile in a country reported the same
+  capital-city coordinate. Falls back to the stored values if the lookup fails.
+  The trust check expects the launch timezone, and auto-adjust won't rewrite an
+  account's locale to follow it. Cloak also gets the resolved IP for WebRTC.
+- **SOCKS5 proxies with username/password** (`persona/bridge.py`). Chromium can't
+  authenticate to SOCKS5 (launch failed with "Browser does not support socks5
+  proxy authentication"). A loopback HTTP bridge now carries the credentials,
+  hands hostnames to the proxy unresolved (no local DNS), and is shared per
+  upstream. The proxy pool's health check now tests SOCKS5 through it too.
+- **Engine/machine warnings** (`launch_warnings`): a profile whose OS differs
+  from this machine on Playwright/Patchright gets a warning, because text renders
+  with the machine's real fonts and no JS patch hides that. Cloak warns for
+  Linux/Android profiles (it can only present Windows/macOS) and for macOS
+  profiles off a Mac (needs Mac fonts and a HiDPI screen). Shown at
+  `persona launch`, on the Health page, and from `/api/fingerprint/validate`.
+- **Per-profile extra launch flags** (`launch_args` / dashboard "Extra launch
+  flags"). Flags Persona manages itself (proxy, user-data dir, DNS lockdown,
+  debugging port, extensions, Cloak seed) are dropped with a warning instead of
+  silently undoing a guarantee.
 - **Mobile (Android) profiles**: fingerprint generation now assembles a whole
   handset — the model in the User-Agent (`Pixel 7`, `SM-G991B`, …), the Android
   version, the GPU, screen and RAM all describe one real phone rather than mixed

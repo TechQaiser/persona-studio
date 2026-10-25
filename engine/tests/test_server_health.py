@@ -10,13 +10,14 @@ pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient
 
-from persona.server import create_app
+from persona.server import TOKEN_HEADER, create_app
 
 
 @pytest.fixture()
 def client(tmp_path):
     app = create_app(str(tmp_path), start_scheduler=False)
-    return TestClient(app)
+    return TestClient(app, base_url="http://localhost",
+                      headers={TOKEN_HEADER: app.state.api_token})
 
 
 def _make_profile(client, name="Acct", **over):
@@ -156,3 +157,32 @@ def test_folder_create_rename_delete(client):
     after = {row["id"]: row for row in client.get("/api/profiles").json()}
     assert after[p["id"]]["folder"] == "Unfiled"
     assert len(after) == 1                          # profile survived the delete
+
+
+# ---- quick proxy check from the editor form ------------------------------
+def test_proxy_check_needs_host_and_port(client):
+    assert client.post("/api/proxy/check", json={"proxy": {"host": "", "port": ""}}).status_code == 400
+
+
+def test_proxy_check_reports_exit_and_country(client, monkeypatch):
+    from persona import proxypool
+    seen = {}
+
+    def fake(proxy, timeout=12):
+        seen.update(proxy)
+        return {"ok": True, "ip": "203.0.113.9", "country": "US", "city": "Dallas", "latencyMs": 300}
+    monkeypatch.setattr(proxypool, "check", fake)
+    r = client.post("/api/proxy/check", json={"proxy": {
+        "type": "HTTP", "host": " 50.1.2.3 ", "port": "42737", "user": "u", "pass": "p", "country": "US"}}).json()
+    assert seen == {"type": "HTTP", "host": "50.1.2.3", "port": "42737", "user": "u", "pass": "p"}
+    assert r["ip"] == "203.0.113.9" and all(c["ok"] for c in r["checks"])
+
+    r = client.post("/api/proxy/check", json={"proxy": {"host": "h", "port": "1", "country": "DE"}}).json()
+    assert not r["checks"][1]["ok"] and "expected DE" in r["checks"][1]["detail"]
+
+
+def test_proxy_check_surfaces_failure(client, monkeypatch):
+    from persona import proxypool
+    monkeypatch.setattr(proxypool, "check", lambda proxy, timeout=12: {"ok": False, "error": "407 Proxy Authentication Required"})
+    r = client.post("/api/proxy/check", json={"proxy": {"host": "h", "port": "1"}}).json()
+    assert r["ok"] is False and "407" in r["checks"][0]["detail"]

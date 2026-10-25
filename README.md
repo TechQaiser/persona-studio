@@ -80,6 +80,10 @@ persona-studio/
 | 📡 **Proxy & leak test** | Exit IP, country and timezone match + WebRTC leak detection |
 | 🌐 **DNS leak check** | Confirms name lookups exit through the proxy, not your real ISP's resolver |
 | 🌐 **Proxy pool** | Import, health-check and assign proxies round-robin across profiles |
+| 📌 **Same device every launch** | Each profile's engine identity is pinned, so a logged-in account never sees its device change |
+| 📍 **Exit-IP geo** | Timezone and city-level geolocation come from the proxy's *real* exit IP at every launch |
+| 🧱 **DNS lockdown** | With a proxy, nothing is resolved by your own DNS, so there's nothing to leak |
+| 🧦 **Authenticated SOCKS5** | `socks5://user:pass@host` works through a local bridge (Chromium can't do this natively) |
 | 🔐 **TLS/JA3 check** | Reads the handshake fingerprint — the one layer JS injection can't reach |
 | ❤️ **Health overview** | One page: coherence, proxy, trust grade and warm-up schedule per profile |
 | 🔑 **Encrypted vault** | Proxy passwords encrypted at rest behind a master password |
@@ -204,7 +208,7 @@ choose per profile:
 | Engine | Strength | Notes |
 |---|---|---|
 | `cloak` ⭐ | Patched Chromium binary | **Recommended.** CloakBrowser — C++-level fingerprint/TLS/CDP patches; reaches Cloudflare/DataDome/reCAPTCHA-v3-grade evasion. |
-| `camoufox` ⭐ | Patched Firefox (C++-level) | **Recommended.** Among the strongest open options; brings its own coherent fingerprint. |
+| `camoufox` ⭐ | Patched Firefox (C++-level) | **Recommended.** Among the strongest open options; brings its own coherent fingerprint, pinned per profile by Persona. |
 | `patchright` | Runtime-patched Playwright | Drop-in; fixes `webdriver`/CDP leaks the stock engine can't. |
 | `playwright` | Built-in, always available | Stock Chromium + injected stealth script. Passes basic bot tests (BrowserScan, sannysoft); can't beat TLS/CDP-level detection. |
 
@@ -221,6 +225,63 @@ Being honest about limits: pure JavaScript injection (the `playwright` engine)
 has a ceiling — for Cloudflare / DataDome / reCAPTCHA-v3-grade evasion, pair a
 runtime-patched engine with a residential proxy and a warmed-up session. Persona
 stays the same manager over all of them.
+
+## What happens at launch
+
+A coherent fingerprint on paper isn't enough. What matters is what the site
+*actually sees* when the browser opens. Every launch applies these, and each
+one was checked against a real browser, not only in unit tests:
+
+| Protection | What it fixes |
+|---|---|
+| **Pinned identity** | Camoufox would otherwise generate a new device on every launch, and Cloak picks its own seed. Each profile's engine fingerprint is created once and kept in its user-data dir (`.persona-camoufox-fingerprint.json`, `.cloakbrowser-seed`). A backup/restore keeps the device; "duplicate as template" gets a new one. |
+| **Persona's values reach Cloak** | Cores, RAM, screen, GPU vendor/renderer and platform are passed as `--fingerprint-*` flags, so the Coherence meter grades what the site sees. |
+| **Real Chrome version** | The UA moves to the engine's real Chromium major (e.g. Playwright 151, Cloak 146), and the dashboard follows. A UA older than the engine gets caught by feature detection. |
+| **`userAgentData` + Client Hints** | On Playwright/Patchright the full UA metadata is set through CDP, so `navigator.userAgentData`, `sec-ch-ua*` headers and the UA all agree. Without it, `HeadlessChrome` would show through. |
+| **`devicePixelRatio`** | Part of the device: Macs are 2, phones use their panel's exact ratio, Windows 1536x864 is 1.25. A Mac at 1 is an instant tell. |
+| **`deviceMemory`** | Reported the way Chrome does it (a power of two, max 8). A raw "16" is a value no real Chrome produces. |
+| **Exit-IP timezone + geolocation** | The proxy's exit IP is looked up *through the proxy*, and the browser uses that IP's timezone and city. Each profile gets its own nearby spot, stable across launches, instead of every profile sharing one capital-city point. If the lookup fails, the stored values are used. |
+| **DNS lockdown** | `--host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE <proxy>, EXCLUDE localhost"`: no local DNS lookups, so prefetch or WebRTC STUN can't reach your ISP's resolver. `persona dns` verifies it from the outside. |
+| **WebRTC** | Real IP never exposed. On Cloak the ICE candidate is rewritten to the proxy's exit IP. |
+| **SOCKS5 with auth** | A loopback bridge holds the credentials and passes hostnames to the proxy unresolved. The proxy pool's health check uses it too. |
+| **Engine/machine warnings** | No JS patch can change the fonts your machine really has. A profile whose OS differs from this machine on Playwright/Patchright, a Linux/Android profile on Cloak, or a macOS profile on Cloak off a Mac gets a warning at `persona launch` and on the Health page. |
+| **Extra launch flags** | Per profile (dashboard → editor → *Extra launch flags*). Flags Persona manages itself (proxy, user-data dir, DNS lockdown, debugging port, extensions, Cloak seed) are ignored with a warning instead of silently undoing a protection. |
+
+**Engine coverage**
+
+| | `cloak` | `camoufox` | `patchright` / `playwright` |
+|---|:---:|:---:|:---:|
+| Pinned identity across launches | ✅ | ✅ | ✅ (seeded stealth script) |
+| Persona's hardware/GPU/screen presented | ✅ | its own (Firefox) | ✅ |
+| Chrome version synced to engine | ✅ | n/a (Firefox) | ✅ |
+| Exit-IP timezone + geolocation | ✅ | ✅ (its own geoip) | ✅ |
+| DNS lockdown | ✅ | Firefox proxies DNS | ✅ |
+| Authenticated SOCKS5 | ✅ via bridge | ✅ via bridge | ✅ via bridge |
+| Real-OS font rendering | Windows/macOS personas | ✅ | ❌ host fonts (warned) |
+
+**Known limits**
+
+- Cloak in a visible window takes `devicePixelRatio` from the real screen, so a
+  macOS profile needs a HiDPI display (and the Mac fonts installed). The trust
+  check flags a mismatch; headless launches are emulated correctly.
+- Camoufox profiles still show a Chrome-style fingerprint in the dashboard,
+  while the site sees Camoufox's own pinned Firefox fingerprint.
+- Camoufox's canvas changes per session. Firefox's built-in fingerprinting
+  protection does that for every real Firefox user, so Persona leaves it as is.
+- SOCKS4 proxies aren't supported yet.
+- The exit-IP lookup calls a public echo service (ipwho.is / ipapi.co)
+  *through the proxy*. Your real IP isn't exposed, but launch takes about a
+  second longer.
+
+## Local API security
+
+`persona serve` listens on `127.0.0.1` only. Any web page open in your browser
+can reach localhost, so the API also requires a per-start token, which the
+dashboard picks up automatically. CORS only allows the dashboard's own origin,
+and requests with a non-loopback `Host` header are refused (this blocks DNS
+rebinding). Scripts read the token from `~/.persona/api-token`. See
+[engine/README.md](engine/README.md#http-api) for details and the environment
+variables to extend it.
 
 ## Roadmap
 
@@ -286,6 +347,13 @@ stays the same manager over all of them.
       fingerprint, so the copy is a distinct device, never a fingerprint twin
 - [x] Per-profile activity log — launches, warm-ups, trust runs and session
       checks, shown as a timeline in the editor
+- [x] Pinned engine identities: Camoufox and CloakBrowser present the same
+      device every launch, and Cloak presents Persona's own hardware/GPU/screen
+- [x] Launch-time geo: timezone + city-level geolocation from the proxy's exit
+      IP, with DNS lockdown so nothing resolves outside the proxy
+- [x] Authenticated SOCKS5 proxies via a local bridge (remote DNS)
+- [x] Device-accurate `devicePixelRatio` and `deviceMemory`; the UA and Client
+      Hints follow the engine's real Chrome version
 
 **Next**
 

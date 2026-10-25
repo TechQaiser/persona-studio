@@ -332,7 +332,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const up = await api.health();
+      const up = await api.ping();
       if (cancelled) return;
       if (up) {
         try {
@@ -755,7 +755,10 @@ function ProfilesView({ filtered, query, setQuery, folder, sel, setSel, toggleSe
                       <div className="ps-name">
                         <span className={"ps-status " + p.status} />
                         <div>
-                          <div className="ps-pname">{p.name}</div>
+                          <div className="ps-pname">{p.name}{p.launchError && (
+                            <span title={p.launchError}
+                              style={{ marginLeft: 8, fontSize: 10, color: T.red, border: `1px solid ${T.red}`, borderRadius: 4, padding: "1px 5px", verticalAlign: "middle", cursor: "help" }}>
+                              launch failed</span>)}</div>
                           <div className="ps-tags">{p.tags.map(t => (
                             <span key={t} className={"ps-tag clickable" + (filters.tag === t ? " on" : "")}
                               title={filters.tag === t ? "Clear tag filter" : `Filter by "${t}"`}
@@ -936,7 +939,7 @@ function newProfile(folder, defaultEngine = ENGINE_ORDER[0]) {
 function ProbePanel({ probe, kind }) {
   if (!probe || probe.kind !== kind) return null;
   if (probe.state === "running")
-    return <div className="ps-hint"><RefreshCw size={12} className="ps-spin" /> Opening the profile in the background — this takes a few seconds.</div>;
+    return <div className="ps-hint"><RefreshCw size={12} className="ps-spin" /> Testing — this takes a few seconds.</div>;
   if (probe.state === "error")
     return <div className="ps-hint"><ShieldAlert size={12} /> {probe.data}</div>;
 
@@ -1261,14 +1264,26 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
                   </Row>
                   <div className="ps-cookie-actions" style={{ marginTop: 4 }}>
                     <button className="ps-btn ghost sm"
-                      disabled={!cookiesReady || probe?.state === "running"}
-                      onClick={() => runProbe("proxy", () => api.proxyTest(p.id))}>
+                      disabled={probe?.state === "running"}
+                      onClick={() => {
+                        if (!live) {
+                          setProbe({ kind: "proxy", state: "error", data: "The engine is offline. Start it (start.bat, or `persona serve`) to test the proxy." });
+                        } else if (!p.proxy.host || !String(p.proxy.port || "").trim()) {
+                          setProbe({ kind: "proxy", state: "error", data: "Fill in the proxy host and port first." });
+                        } else if (cookiesReady) {
+                          runProbe("proxy", () => api.proxyTest(p.id));         // full browser-level test
+                        } else {
+                          runProbe("proxy", () => api.checkProxy(p.proxy));     // quick check, unsaved form
+                        }
+                      }}>
                       <RefreshCw size={13} /> Test connection
                     </button>
                     <button className="ps-btn ghost sm"
                       disabled={!cookiesReady || probe?.state === "running"}
                       onClick={() => runProbe("dns", () => api.dns(p.id))}
-                      title="Do the profile's DNS lookups exit through the proxy, or leak to your real ISP?">
+                      title={cookiesReady
+                        ? "Do the profile's DNS lookups exit through the proxy, or leak to your real ISP?"
+                        : "Save the profile first: the DNS test opens its real browser."}>
                       <Globe size={13} /> DNS leak test
                     </button>
                   </div>
@@ -1276,7 +1291,9 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
                   <ProbePanel probe={probe} kind="dns" />
                   <div className="ps-hint"><MapPin size={12} /> {cookiesReady
                     ? "Test connection routes a real request and reports the exit IP, country and WebRTC leaks. DNS leak test checks whether name lookups escape the proxy to your real ISP's resolver."
-                    : "Save the profile and start the engine to test the connection for real."}</div>
+                    : live
+                      ? "Test connection checks the proxy from this form: exit IP, country and speed. Save the profile for the full browser test (WebRTC, DNS leak)."
+                      : "Start the engine (start.bat, or persona serve) to test the proxy."}</div>
                 </>
               ) : <div className="ps-hint">No proxy — this profile connects directly. Turn it on to route through a residential or datacenter proxy.</div>}
             </>
@@ -1295,6 +1312,12 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
                   placeholder={"C:\\\\tools\\\\metamask\\n/home/me/ext/ublock"} />
               </Field>
               <div className="ps-hint"><Blocks size={12} /> Point at the folder containing <code>manifest.json</code>. Only these extensions load, so nothing carries over between profiles.</div>
+              <Field label="Extra launch flags (one per line, advanced)">
+                <textarea className="ps-in mono" rows={2} value={p.launchArgs || ""}
+                  onChange={e => set({ launchArgs: e.target.value })}
+                  placeholder={"--disable-gpu\n--fingerprint-noise=false"} />
+              </Field>
+              <div className="ps-hint"><Blocks size={12} /> Passed to the browser as-is. Flags Persona manages (proxy, user-data dir, DNS lockdown, debugging port, extensions, Cloak seed) are ignored, and the Health page says so.</div>
 
               <SectionLabel icon={<Sparkles size={13} />} text="Warm-up" />
               <Row>
@@ -1418,7 +1441,7 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
 
         <div className="ps-drawer-foot">
           <button className="ps-btn ghost" onClick={onClose}>Cancel</button>
-          <button className="ps-btn primary" disabled={!p.name} onClick={() => onSave({ ...p, _new: false })}>
+          <button className="ps-btn primary" onClick={() => onSave({ ...p, name: (p.name || "").trim() || "Untitled profile", _new: false })}>
             <Check size={15} /> {p._new ? "Create profile" : "Save changes"}
           </button>
         </div>
@@ -1699,7 +1722,7 @@ function HealthView({ profiles, live, refresh, setEditor }) {
                     {r.status === "running" && <span className="ps-runtag">live</span>}
                     {r.collides && <SharedTag />}
                   </td>
-                  <td className="ps-mono dim">{r.engine}</td>
+                  <td className="ps-mono dim">{r.engine}{r.warnings?.length > 0 && <span style={{ color: T.amber, marginLeft: 6, display: "inline-flex", verticalAlign: "middle" }} title={r.warnings.join(" · ")}><ShieldAlert size={12} /></span>}</td>
                   <td>{r.coherent
                     ? <span style={{ color: T.mint, display: "inline-flex", gap: 5, alignItems: "center" }}><Check size={13} /> ok</span>
                     : <span style={{ color: T.amber, display: "inline-flex", gap: 5, alignItems: "center" }} title={(r.issues || []).join("; ")}><ShieldAlert size={13} /> {r.issues.length}</span>}</td>
@@ -2358,6 +2381,7 @@ a { color: inherit; }
 .ps-btn.primary:hover { filter: brightness(1.08); transform: translateY(-1px); }
 .ps-btn.primary:active { transform: none; }
 .ps-btn.primary:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; transform: none; }
+.ps-btn:disabled { opacity: .45; cursor: not-allowed; }
 .ps-btn.ghost { background: ${T.surface}; border-color: ${T.line}; color: ${T.text}; }
 .ps-btn.ghost:hover { background: ${T.surface2}; border-color: #33334f; }
 

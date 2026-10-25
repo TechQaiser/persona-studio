@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 
+from .fingerprint import navigator_device_memory
 from .models import Fingerprint
 
 
@@ -47,7 +48,7 @@ def build_init_script(fp: Fingerprint) -> str:
         "isMobile": fp.is_mobile,
         "chromeMajor": int(fp.chrome_version.split(".")[0]),
         "hardwareConcurrency": fp.hardware_concurrency,
-        "deviceMemory": fp.device_memory,
+        "deviceMemory": navigator_device_memory(fp.device_memory),
         "languages": fp.languages,
         "webglVendor": fp.webgl_vendor,
         "webglRenderer": fp.webgl_renderer,

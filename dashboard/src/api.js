@@ -12,18 +12,35 @@
 
 const BASE = import.meta.env.VITE_API_URL || "http://localhost:8787";
 
+// The engine issues a fresh API token each time it starts and only hands it to
+// the dashboard's own origin. Fetch it lazily; refetch once if the engine
+// restarted (401) since we last asked.
+let tokenPromise = null;
+function getToken(refresh = false) {
+  if (refresh || !tokenPromise) {
+    tokenPromise = fetch(BASE + "/api/token")
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`token → ${r.status}`))))
+      .then((d) => d.token)
+      .catch((e) => { tokenPromise = null; throw e; });
+  }
+  return tokenPromise;
+}
+
+async function send(method, path, body, token) {
+  const headers = { "X-Persona-Token": token };
+  if (body) headers["Content-Type"] = "application/json";
+  return fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+}
+
 async function req(method, path, body) {
-  const res = await fetch(BASE + path, {
-    method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res = await send(method, path, body, await getToken());
+  if (res.status === 401) res = await send(method, path, body, await getToken(true));
   if (!res.ok) throw new Error(`${method} ${path} → ${res.status}`);
   return res.status === 204 ? null : res.json();
 }
 
 export const api = {
-  async health() {
+  async ping() {
     try {
       const res = await fetch(BASE + "/api/health");
       return res.ok;
@@ -51,6 +68,8 @@ export const api = {
   importCookies: (id, text, clear) => req("POST", `/api/profiles/${id}/cookies`, { text, clear }),
   // These open the profile headlessly too, so they're slow by nature.
   proxyTest: (id) => req("POST", `/api/profiles/${id}/proxy-test`),
+  // Quick check of a proxy straight from the editor form (no saved profile needed).
+  checkProxy: (proxy) => req("POST", "/api/proxy/check", { proxy }),
   trust: (id) => req("POST", `/api/profiles/${id}/trust`),
   tls: (id) => req("POST", `/api/profiles/${id}/tls`),
   // DNS leak check: do name lookups escape the proxy to your real ISP?

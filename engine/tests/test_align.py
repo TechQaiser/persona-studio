@@ -7,6 +7,7 @@ part that would silently do the wrong thing if it broke.
 """
 
 from persona import generate, validate, devices
+from persona.fingerprint import navigator_device_memory
 from persona.models import Profile
 from persona.store import ProfileStore
 from persona.probe import (
@@ -69,14 +70,15 @@ def test_align_reconciles_mac_profile_to_windows_host(tmp_path, monkeypatch):
     assert prof.fingerprint.os == "windows"
     assert prof.fingerprint.platform == "Win32"
     assert prof.fingerprint.hardware_concurrency == 8
-    assert prof.fingerprint.device_memory == 8
+    # RAM is kept when Chrome would already present it as the 8 it showed.
+    assert navigator_device_memory(prof.fingerprint.device_memory) == 8
     assert "RTX 3050 Ti" in prof.fingerprint.webgl_renderer
     assert prof.fingerprint.user_agent.startswith("Mozilla/5.0 (Windows NT")
 
     # And it grades clean — the whole point.
     assert res["before"]["score"] < res["after"]["score"]
     assert res["after"]["score"] == 100
-    assert set(res["changed"]) >= {"os", "platform", "userAgent", "cores", "memory",
+    assert set(res["changed"]) >= {"os", "platform", "userAgent", "cores",
                                    "webglRenderer", "fonts"}
 
 
@@ -102,7 +104,7 @@ def test_align_is_a_noop_when_already_matching(tmp_path, monkeypatch):
         "webdriver": False, "webdriverOwn": False, "hasChrome": True, "plugins": 3,
         "userAgent": fp.user_agent, "platform": fp.platform,
         "languages": list(fp.languages), "cores": fp.hardware_concurrency,
-        "memory": fp.device_memory, "screenW": fp.screen_width, "screenH": fp.screen_height,
+        "memory": navigator_device_memory(fp.device_memory), "screenW": fp.screen_width, "screenH": fp.screen_height,
         "timezone": fp.timezone, "toStringNative": True, "permissionsAgree": True,
         "canvasStable": True, "canvasEmpty": False,
         "webglVendor": fp.webgl_vendor, "webglRenderer": fp.webgl_renderer,

@@ -210,9 +210,26 @@ open twice.
 dashboard uses to manage and launch profiles for real. It listens on
 `http://127.0.0.1:8787` by default (`--host` / `--port` to change).
 
+**Access control.** Any web page open in your everyday browser can reach
+localhost, so the API doesn't trust "it's local":
+
+- Every call except `/api/health` needs an `X-Persona-Token` header. A fresh
+  token is generated each time the server starts and written to
+  `<data-dir>/api-token` (set `PERSONA_API_TOKEN` to pin one).
+- `GET /api/token` hands the token only to the dashboard's origins
+  (`localhost`/`127.0.0.1` on ports 5173 and 4173). CORS allows only those too;
+  add more with `PERSONA_ALLOWED_ORIGINS=http://host:port,…`.
+- The `Host` header must be a loopback name, which blocks DNS-rebinding attacks.
+  If you bind a LAN address, add it with `PERSONA_ALLOWED_HOSTS`.
+
+```bash
+curl -H "X-Persona-Token: $(cat ~/.persona/api-token)" http://127.0.0.1:8787/api/profiles
+```
+
 | Method | Path | Does |
 |---|---|---|
-| GET | `/api/health` | Liveness check the dashboard pings on load |
+| GET | `/api/health` | Liveness check the dashboard pings on load (no token) |
+| GET | `/api/token` | The session's API token — dashboard origins only |
 | GET | `/api/profiles` | List profiles (with live run status) |
 | POST | `/api/profiles` | Create a profile |
 | PUT | `/api/profiles/{id}` | Update a profile |

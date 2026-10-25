@@ -23,6 +23,8 @@ Run it with:  ``persona serve``  (see ``cli.py``).
 from __future__ import annotations
 
 import json
+import os
+import secrets
 import socket
 import subprocess
 import sys
@@ -257,15 +259,21 @@ def to_engine_profile(d: dict) -> Profile:
         languages=langs,
         is_mobile=is_mobile,
         seed=int(d.get("seed") or 0) or generate(os=os_key).seed,
+        # Only an explicit "dpr" pins it; otherwise it follows the OS/screen
+        # (so editing the screen in the dashboard keeps the ratio coherent).
+        device_scale_factor=float(d.get("dpr") or 0),
     )
 
     proxy = None
     px = d.get("proxy")
-    if px and px.get("host"):
+    if px and str(px.get("host") or "").strip():
         scheme = {"HTTP": "http", "HTTPS": "http", "SOCKS5": "socks5"}.get(px.get("type", "HTTP"), "http")
+        # Pasted values often carry stray spaces (" 42737"): "http://h: 42737"
+        # works for urllib but is an invalid --proxy-server for the browser.
+        host, port = str(px["host"]).strip(), str(px.get("port") or "").strip()
         proxy = Proxy(
-            server=f"{scheme}://{px['host']}:{px.get('port', '')}".rstrip(":"),
-            username=px.get("user") or None,
+            server=f"{scheme}://{host}:{port}".rstrip(":"),
+            username=(px.get("user") or "").strip() or None,
             password=px.get("pass") or None,
             country=px.get("country") or None,
         )
@@ -280,6 +288,7 @@ def to_engine_profile(d: dict) -> Profile:
         engine=d.get("engine", "playwright"),
         startup_urls=_parse_startup_urls(d.get("startupUrls")),
         extensions=_parse_lines(d.get("extensions")),
+        launch_args=_parse_lines(d.get("launchArgs")),
     )
 
 
@@ -326,6 +335,7 @@ def to_dashboard_profile(prof: Profile) -> dict:
         "tags": list(prof.tags),
         "startupUrls": "\n".join(prof.startup_urls or []),
         "extensions": "\n".join(prof.extensions or []),
+        "launchArgs": "\n".join(prof.launch_args or []),
         "lastActive": "never",
     }
 
@@ -354,7 +364,60 @@ def dashboard_coherence(d: dict) -> list[str]:
         return [f"could not validate: {e}"]
 
 
-def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
+# --------------------------------------------------------------------------
+# Local-API access control.
+# --------------------------------------------------------------------------
+TOKEN_HEADER = "X-Persona-Token"
+TOKEN_FILE = "api-token"
+# Reachable without the token: liveness only (the dashboard probes it to pick
+# LIVE vs DEMO mode). It reveals nothing and changes nothing.
+OPEN_PATHS = {"/api/health"}
+DEFAULT_ORIGINS = [f"http://{h}:{p}" for p in (5173, 4173) for h in ("localhost", "127.0.0.1")]
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
+
+
+def _split_env(name: str) -> list[str]:
+    return [v.strip() for v in os.environ.get(name, "").split(",") if v.strip()]
+
+
+def allowed_origins(extra: Optional[list[str]] = None) -> list[str]:
+    """Dashboard origins allowed through CORS (add more via PERSONA_ALLOWED_ORIGINS)."""
+    out = list(DEFAULT_ORIGINS)
+    for o in [*(extra or []), *_split_env("PERSONA_ALLOWED_ORIGINS")]:
+        o = o.rstrip("/")
+        if o not in out:
+            out.append(o)
+    return out
+
+
+def allowed_hosts(extra: Optional[list[str]] = None) -> set[str]:
+    """Host-header names accepted (add more via PERSONA_ALLOWED_HOSTS)."""
+    return LOOPBACK_HOSTS | {h.lower() for h in [*(extra or []), *_split_env("PERSONA_ALLOWED_HOSTS")]}
+
+
+def _host_name(header: str) -> str:
+    """'localhost:8787' -> 'localhost', '[::1]:8787' -> '[::1]'."""
+    header = header.strip().lower()
+    if header.startswith("["):
+        return header.split("]", 1)[0] + "]"
+    return header.split(":", 1)[0]
+
+
+def _write_token_file(root: Path, token: str) -> None:
+    """Drop the token in the data dir so local scripts can call the API too."""
+    path = Path(root) / TOKEN_FILE
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(token, encoding="utf-8")
+        os.chmod(path, 0o600)   # best effort; a no-op beyond read-only on Windows
+    except OSError:
+        pass
+
+
+def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
+               api_token: Optional[str] = None,
+               extra_origins: Optional[list[str]] = None,
+               extra_hosts: Optional[list[str]] = None):
     _require_fastapi()
     from fastapi import FastAPI, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
@@ -369,11 +432,44 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
     attached: dict[str, dict] = {}   # pid -> CDP connection info while attached
 
     app = FastAPI(title="Persona API", version="0.1.0")
+
+    # Local-API hardening. Anything that can reach localhost — including any web
+    # page open in the user's everyday browser — could otherwise launch profiles
+    # or read their cookies. So: (1) only the dashboard's origins pass CORS,
+    # (2) the Host header must be a loopback name (defeats DNS rebinding), and
+    # (3) every call carries a per-start token the dashboard fetches first.
+    token = api_token or os.environ.get("PERSONA_API_TOKEN") or secrets.token_urlsafe(32)
+    app.state.api_token = token
+    _write_token_file(engine_store.root, token)
+    origins = allowed_origins(extra_origins)
+    hosts = allowed_hosts(extra_hosts)
+
+    @app.middleware("http")
+    async def local_api_guard(request, call_next):
+        from fastapi.responses import JSONResponse
+        if _host_name(request.headers.get("host", "")) not in hosts:
+            return JSONResponse({"detail": "host not allowed"}, status_code=403)
+        path = request.url.path
+        if request.method == "OPTIONS" or path in OPEN_PATHS:
+            return await call_next(request)
+        if path == "/api/token":
+            # A browser always sends Origin on a cross-origin fetch; no Origin
+            # means curl/scripts on this machine, which could read the file anyway.
+            origin = request.headers.get("origin")
+            if origin and origin not in origins:
+                return JSONResponse({"detail": "origin not allowed"}, status_code=403)
+            return await call_next(request)
+        sent = request.headers.get(TOKEN_HEADER, "")
+        if not secrets.compare_digest(sent, token):
+            return JSONResponse({"detail": "missing or invalid API token"}, status_code=401)
+        return await call_next(request)
+
+    # Added last so it's the outermost layer: preflights and 401s get CORS headers.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=origins,
         allow_methods=["*"],
-        allow_headers=["*"],
+        allow_headers=["Content-Type", TOKEN_HEADER],
     )
 
     def is_running(pid: str) -> bool:
@@ -386,6 +482,8 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
             stored = dash.get(pid)
             if stored is not None:
                 stored["_last_active"] = time.time()
+                if proc.returncode not in (0, None):
+                    stored["_launchError"] = _launch_error_summary(pid, proc.returncode)
                 log = stored.get("_activity") or []
                 log.append({"at": time.time(), "kind": "session-end", "detail": ""})
                 stored["_activity"] = log[-60:]
@@ -400,7 +498,23 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
         running_now = is_running(d["id"])
         d["status"] = "running" if running_now else "stopped"
         d["lastActive"] = "now" if running_now else _rel_time(d.get("_last_active"))
+        d["launchError"] = None if running_now else d.get("_launchError")
         return d
+
+    def _launch_log(pid: str) -> Path:
+        logs = engine_store.root / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        return logs / f"{pid}.log"
+
+    def _launch_error_summary(pid: str, code: int) -> str:
+        """The last meaningful lines of a failed launch's log (the actual error)."""
+        try:
+            lines = [l.strip() for l in _launch_log(pid).read_text(
+                encoding="utf-8", errors="replace").splitlines() if l.strip()]
+        except OSError:
+            lines = []
+        tail = [l for l in lines if not l.startswith(("File ", "^", "~"))][-3:]
+        return (" · ".join(tail) or f"the browser process exited with code {code}")[:500]
 
     ACTIVITY_CAP = 60          # keep the last N events per profile
 
@@ -420,6 +534,10 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
     @app.get("/api/health")
     def health():
         return {"ok": True, "version": "0.1.0"}
+
+    @app.get("/api/token")
+    def api_token_route():
+        return {"token": token, "header": TOKEN_HEADER}
 
     @app.get("/api/engines")
     def engines():
@@ -535,12 +653,22 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
         if is_running(pid):
             return decorate(d)
         # Materialise a real engine profile, then open it in its own process.
-        engine_store.save(to_engine_profile(d))
+        # Its output goes to a per-profile log, so a launch that dies (missing
+        # binary, bad proxy flag, …) can be reported back instead of the profile
+        # just flipping to "stopped" with no reason.
+        _materialise(d)
+        log_path = _launch_log(pid)
+        log = open(log_path, "w", encoding="utf-8", errors="replace")
         proc = subprocess.Popen(
-            [sys.executable, "-m", "persona", "--data-dir", str(engine_store.root),
+            [sys.executable, "-u", "-m", "persona", "--data-dir", str(engine_store.root),
              "launch", pid],
+            stdout=log, stderr=subprocess.STDOUT,
         )
+        log.close()                       # the child holds its own handle
         running[pid] = proc
+        stored = dash.get(pid)
+        if stored is not None and stored.pop("_launchError", None) is not None:
+            dash.save(stored)
         _log_activity(pid, "launch", d.get("engine") or "")
         return decorate(d)
 
@@ -578,6 +706,20 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
             raise HTTPException(500, (proc.stdout + proc.stderr).strip() or "command failed")
         return proc.stdout
 
+    def _materialise(d: dict) -> Profile:
+        """Write the engine-side profile a subcommand will open. Its Chrome
+        version is first moved to the engine's real one, and the dashboard copy
+        follows, so the UI shows the UA the site will actually see."""
+        prof = to_engine_profile(d)
+        from .drivers import sync_engine_version
+        engine = d.get("engine") or engine_store.get_default_engine()
+        if sync_engine_version(prof, engine):
+            d["browserVersion"] = prof.fingerprint.chrome_version
+            d["userAgent"] = prof.fingerprint.user_agent
+            dash.save(d)
+        engine_store.save(prof)
+        return prof
+
     def _prepare(pid: str) -> dict:
         """Fetch a dashboard profile, refuse if its session is busy, and make sure
         the engine-side profile exists so a subcommand can open it."""
@@ -586,7 +728,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
             raise HTTPException(404, "profile not found")
         if is_running(pid):
             raise HTTPException(409, "stop the profile first — its session is in use")
-        engine_store.save(to_engine_profile(d))
+        _materialise(d)
         return d
 
     @app.get("/api/profiles/{pid}/cookies")
@@ -674,7 +816,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
         if engine not in CHROMIUM_ENGINES:
             raise HTTPException(400, f"the '{engine}' engine has no DevTools to attach "
                                      f"to — use one of: {', '.join(CHROMIUM_ENGINES)}")
-        engine_store.save(to_engine_profile(d))
+        _materialise(d)
         port = _free_port()
         cli = [sys.executable, "-m", "persona", "--data-dir", str(engine_store.root),
                "attach", pid, "--port", str(port)]
@@ -838,7 +980,15 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
 
     @app.post("/api/fingerprint/validate")
     def validate_fingerprint(profile: dict):
-        return {"issues": dashboard_coherence(profile)}
+        return {"issues": dashboard_coherence(profile), "warnings": _warnings(profile)}
+
+    def _warnings(d: dict) -> list[str]:
+        from .drivers import launch_warnings
+        try:
+            return launch_warnings(to_engine_profile(d),
+                                   d.get("engine") or engine_store.get_default_engine())
+        except Exception:  # noqa: BLE001 - advisory only
+            return []
 
     @app.post("/api/profiles/import")
     def import_profiles(body: dict):
@@ -896,6 +1046,36 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
         status = "ok" if res.get("ok") else ("skipped" if res.get("ok") is None else "failed")
         pool.update(pid, {"status": status, "lastCheck": res, "checkedAt": time.time()})
         return {**res, "status": status}
+
+    @app.post("/api/proxy/check")
+    def check_proxy(body: dict):
+        """Test a proxy straight from the editor form — no saved profile needed.
+        A real request goes out through it (SOCKS5 via the local bridge) and the
+        exit IP, location and latency come back, plus whether the exit country
+        matches the one the form declares. The full browser-level test (WebRTC,
+        DNS, TLS) still runs from a saved profile."""
+        from . import proxypool as pp
+        px = body.get("proxy") or body
+        if not px.get("host") or not str(px.get("port") or "").strip():
+            raise HTTPException(400, "fill in the proxy host and port first")
+        proxy = {"type": px.get("type") or "HTTP", "host": str(px["host"]).strip(),
+                 "port": str(px["port"]).strip(), "user": px.get("user") or None,
+                 "pass": px.get("pass") or None}
+        res = pp.check(proxy)
+        if res.get("ok") is None:
+            return {**res, "checks": [{"name": "Proxy reachable", "ok": False,
+                                       "detail": res.get("error", "")}]}
+        if not res.get("ok"):
+            return {**res, "checks": [{"name": "Proxy reachable", "ok": False,
+                                       "detail": res.get("error", "no answer")}]}
+        checks = [{"name": "Traffic goes out through the proxy", "ok": True,
+                   "detail": f"exit IP {res['ip']}"}]
+        want = (px.get("country") or "").upper()
+        got = (res.get("country") or "").upper()
+        if want:
+            checks.append({"name": "Exit country matches the proxy setting", "ok": got == want,
+                           "detail": f"expected {want}, got {got or 'unknown'}"})
+        return {**res, "checks": checks}
 
     @app.post("/api/proxies/assign")
     def assign_proxies(body: dict):
@@ -1007,6 +1187,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
         for d in profiles:
             pid = d["id"]
             issues = dashboard_coherence(d)
+            warnings = _warnings(d)
             px = d.get("proxy") or {}
             has_proxy = bool(px.get("host"))
             trust = d.get("_trust")
@@ -1018,7 +1199,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
             # a known-poor trust grade, a fingerprint shared with another profile,
             # or a session that has expired / is about to.
             sess_status = (d.get("_session") or {}).get("status")
-            attention = (bool(issues) or (grade in ("C", "D")) or collides
+            attention = (bool(issues) or bool(warnings) or (grade in ("C", "D")) or collides
                          or sess_status in ("stale", "expiring"))
 
             rows.append({
@@ -1030,6 +1211,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
                 "lastActive": "now" if run_now else _rel_time(d.get("_last_active")),
                 "coherent": not issues,
                 "issues": issues,
+                "warnings": warnings,      # engine/machine risks (e.g. fonts)
                 "collides": collides,
                 "proxy": {"set": has_proxy, "country": px.get("country") or None,
                           "type": px.get("type") if has_proxy else None},
@@ -1059,7 +1241,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True):
                 d = dash.get(pid)
                 if not d or is_running(pid):
                     continue        # gone, or busy — try again next tick
-                engine_store.save(to_engine_profile(d))
+                _materialise(d)
                 _spawn_warmup(pid, s.get("minutes", 5), s.get("preset"))
                 sched.mark_run(s["id"], time.time())
         except Exception:           # pragma: no cover - a bad tick must not kill the loop
@@ -1085,6 +1267,10 @@ def serve(host: str = "127.0.0.1", port: int = 8787, data_dir: Optional[str] = N
     """Start the API server (blocking)."""
     _require_fastapi()
     import uvicorn
-    app = create_app(data_dir)
-    print(f"Persona API on http://{host}:{port}  (data dir: {ProfileStore(data_dir).root})")
+    # Binding a specific non-loopback address means clients will send it as Host.
+    extra = [host] if host not in ("0.0.0.0", "::", "") else []
+    app = create_app(data_dir, extra_hosts=extra)
+    root = ProfileStore(data_dir).root
+    print(f"Persona API on http://{host}:{port}  (data dir: {root})")
+    print(f"API token (send as {TOKEN_HEADER}) written to {root / TOKEN_FILE}")
     uvicorn.run(app, host=host, port=port, log_level="info")

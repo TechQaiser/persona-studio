@@ -130,6 +130,9 @@ def cmd_launch(args, store: ProfileStore) -> int:
         for p in problems:
             print(f"  - {p}")
     engine = args.engine or prof.engine or "playwright"
+    from .drivers import launch_warnings
+    for w in launch_warnings(prof, engine):
+        print(_c(f"Warning: {w}", C.YEL))
     print(_c(f"Launching '{prof.name}' via {engine}...", C.CYN))
     from .launcher import launch  # imported lazily (browser deps optional)
     launch(prof, store, headless=args.headless, keep_open=False, engine=engine)

@@ -36,13 +36,15 @@ returns launch handles (``keep_open=True``) or blocks until the window closes
 from __future__ import annotations
 
 import importlib.util
+import json
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import devices as fp_mod_devices
 from . import fingerprint as fp_mod
+from .bridge import browser_proxy
+from .geo import launch_geo
 from .models import Profile
 from .stealth import build_init_script
 
@@ -63,21 +65,6 @@ def _open_startup_urls(context, page, profile: Profile) -> None:
             continue  # unreachable site / typo — don't crash the session
 
 
-def _geolocation_for(profile: Profile) -> Optional[dict]:
-    """Coordinates that agree with the profile's proxy country (or its locale
-    when there's no proxy), so navigator.geolocation doesn't contradict the IP."""
-    country = None
-    if profile.proxy and profile.proxy.country:
-        country = profile.proxy.country.upper()
-    if not country:
-        country = fp_mod_devices.LOCALE_TO_COUNTRY.get(profile.fingerprint.locale)
-    coords = fp_mod_devices.COUNTRY_GEO.get(country or "")
-    if not coords:
-        return None
-    lat, lon = coords
-    return {"latitude": lat, "longitude": lon, "accuracy": 60}
-
-
 def _webrtc_arg(profile: Profile) -> list[str]:
     """Stop WebRTC from leaking the real IP. With a proxy, force everything
     through it (or don't send UDP at all); otherwise expose only the public
@@ -85,6 +72,97 @@ def _webrtc_arg(profile: Profile) -> list[str]:
     if profile.proxy:
         return ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
     return ["--force-webrtc-ip-handling-policy=default_public_interface_only"]
+
+
+def _dns_lockdown_arg(profile: Profile) -> list[str]:
+    """With a proxy, nothing should be resolved by this machine's DNS: page
+    hosts already go to the proxy by name, but prefetching, WebRTC STUN names and
+    the like would otherwise ask the real ISP's resolver — a DNS leak that
+    places the user. Every local lookup is made to fail except the proxy's own
+    host (which has to be found to connect to it) and localhost.
+
+    The DNS leak *check* (``persona dns``) verifies this from the outside."""
+    if not profile.proxy:
+        return []
+    from urllib.parse import urlsplit
+    host = urlsplit(browser_proxy(profile.proxy).server).hostname or ""
+    excludes = ", ".join(f"EXCLUDE {h}" for h in dict.fromkeys([host, "localhost"]) if h)
+    return [f"--host-resolver-rules=MAP * ~NOTFOUND, {excludes}"]
+
+
+# Client Hints platformVersion a real browser on each OS reports.
+_CH_PLATFORM_VERSION = {"windows": "15.0.0", "macos": "14.6.0", "linux": "6.8.0"}
+
+
+def ua_metadata(fp, full_version: Optional[str] = None) -> dict:
+    """``userAgentMetadata`` for CDP's ``Emulation.setUserAgentOverride``.
+
+    Without it Playwright's Chromium answers ``navigator.userAgentData`` (and
+    the high-entropy Client Hints headers) as itself — "HeadlessChrome" /
+    "Chromium" with no "Google Chrome" — contradicting the UA and the
+    ``sec-ch-ua`` header. Brands mirror :func:`fingerprint.sec_ch_ua`."""
+    major = fp.chrome_version.split(".")[0]
+    full = full_version if (full_version or "").split(".")[0] == major else fp.chrome_version
+    full = ".".join(full.split(".")[:4])
+    brands = [("Chromium", major), ("Google Chrome", major), ("Not-A.Brand", "99")]
+    phone = fp_mod.android_device(fp)
+    apple_silicon = fp.os == "macos" and "Apple" in (fp.webgl_renderer or "")
+    return {
+        "brands": [{"brand": b, "version": v} for b, v in brands],
+        "fullVersionList": [{"brand": b, "version": full if v == major else f"{v}.0.0.0"}
+                            for b, v in brands],
+        "fullVersion": full,
+        "platform": fp.ch_platform.strip('"'),
+        "platformVersion": (f"{phone['android']}.0.0" if phone
+                            else _CH_PLATFORM_VERSION.get(fp.os, "")),
+        "architecture": "arm" if (fp.is_mobile or apple_silicon) else "x86",
+        "bitness": "64",
+        "model": phone["model"] if phone else "",
+        "mobile": bool(fp.is_mobile),
+        "wow64": False,
+    }
+
+
+def _apply_ua_metadata(context, page, fp, full_version: Optional[str]) -> None:
+    """Install the UA override on every page of a Chromium context (now and
+    later), so ``navigator.userAgentData`` agrees with the UA and headers."""
+    params = {"userAgent": fp.user_agent, "platform": fp.platform,
+              "acceptLanguage": ",".join(fp.languages),
+              "userAgentMetadata": ua_metadata(fp, full_version)}
+
+    def install(p):
+        try:
+            context.new_cdp_session(p).send("Emulation.setUserAgentOverride", params)
+        except Exception:  # noqa: BLE001 - a closed/odd page must not kill the launch
+            pass
+
+    for p in context.pages:
+        install(p)
+    context.on("page", install)
+
+
+# Flags Persona sets itself. Letting a profile override them would silently
+# undo a guarantee (its session dir, proxy, DNS lockdown, automation port,
+# extension isolation, pinned Cloak seed), so they're dropped with a warning.
+MANAGED_FLAGS = ("--user-data-dir", "--proxy-server", "--proxy-bypass-list",
+                 "--host-resolver-rules", "--remote-debugging-port", "--remote-debugging-pipe",
+                 "--load-extension", "--disable-extensions-except", "--fingerprint")
+
+
+def profile_launch_args(profile: Profile) -> tuple[list[str], list[str]]:
+    """The profile's own extra flags, split into (kept, dropped)."""
+    kept, dropped = [], []
+    for raw in getattr(profile, "launch_args", None) or []:
+        arg = raw.strip()
+        if not arg:
+            continue
+        if not arg.startswith("-"):
+            dropped.append(arg)
+        elif arg.split("=", 1)[0] in MANAGED_FLAGS:
+            dropped.append(arg)
+        else:
+            kept.append(arg)
+    return kept, dropped
 
 
 def _extension_args(profile: Profile) -> list[str]:
@@ -100,6 +178,163 @@ def _extension_args(profile: Profile) -> list[str]:
         return []
     joined = ",".join(paths)
     return [f"--disable-extensions-except={joined}", f"--load-extension={joined}"]
+
+
+# --------------------------------------------------------------------------
+# Pinned engine identities. A logged-in account must see the *same* device on
+# every launch — a fingerprint that changes between sessions reads as a new
+# device (security prompts) or a spoofed one (bans). The patched engines make
+# their own fingerprints, so we pin each one per profile and feed it Persona's
+# values where the engine accepts them. Pins live in the profile's user-data
+# dir: a backup/restore carries the identity along, "duplicate as template"
+# (fresh user-data) gets a new one.
+# --------------------------------------------------------------------------
+CLOAK_SEED_FILE = ".cloakbrowser-seed"            # CloakBrowser's own pin file
+CAMOUFOX_FP_FILE = ".persona-camoufox-fingerprint.json"
+# CloakBrowser presents a Windows or a macOS device; anything else it can't be.
+CLOAK_PLATFORMS = {"windows": "windows", "macos": "macos"}
+CLOAK_SEED_MIN, CLOAK_SEED_SPAN = 10000, 90000      # the binary's seed range
+
+
+def host_os() -> str:
+    import platform
+    return {"Windows": "windows", "Darwin": "macos"}.get(platform.system(), "linux")
+
+
+def launch_warnings(profile: Profile, engine: str, host: Optional[str] = None) -> list[str]:
+    """Risks the fingerprint can't show, because they depend on the engine and
+    the machine it runs on. Fonts are the big one: a page measures text with
+    the fonts this machine really has, which no JS patch can change — so a
+    profile claiming another OS is linkable by its font metrics unless the
+    engine renders that OS's fonts itself."""
+    host = host or host_os()
+    want = profile.fingerprint.os
+    out: list[str] = []
+    dropped = profile_launch_args(profile)[1]
+    if dropped:
+        out.append("ignored launch flags (Persona manages these, or they aren't flags): "
+                   + ", ".join(dropped))
+    if engine in ("playwright", "patchright") and want != host:
+        out.append(f"{want} profile on a {host} machine with the '{engine}' engine: text renders "
+                   f"with this machine's fonts, so font fingerprinting reads it as {host}. "
+                   f"Use the 'cloak' engine (Windows/macOS) or 'camoufox', or a {host} profile.")
+    if engine == "cloak":
+        if want not in CLOAK_PLATFORMS:
+            out.append(f"the 'cloak' engine can only present Windows or macOS — this {want} "
+                       f"profile will show as the binary's own platform. Use another engine.")
+        elif want == "macos" and host != "macos":
+            out.append("macOS profile on cloak: install the real Mac fonts on this machine "
+                       "(a Mac with no Mac fonts is a common block reason) and, headed, use a "
+                       "HiDPI display — the pixel ratio comes from the real screen.")
+    return out
+
+
+_engine_versions: dict[str, Optional[str]] = {}
+
+
+def engine_chrome_version(name: str) -> Optional[str]:
+    """The Chromium version a launch engine actually runs, read without
+    launching it (``None`` for Camoufox/Firefox or when unknown)."""
+    if name in _engine_versions:
+        return _engine_versions[name]
+    version = None
+    try:
+        if name == "cloak":
+            from cloakbrowser.config import get_chromium_version
+            version = get_chromium_version()
+        elif name in ("playwright", "patchright"):
+            spec = importlib.util.find_spec(name)
+            if spec and spec.origin:
+                f = Path(spec.origin).parent / "driver" / "package" / "browsers.json"
+                browsers = json.loads(f.read_text(encoding="utf-8"))["browsers"]
+                version = next(b["browserVersion"] for b in browsers if b["name"] == "chromium")
+    except Exception:  # noqa: BLE001 - unknown is fine: the profile keeps its version
+        version = None
+    _engine_versions[name] = version
+    return version
+
+
+def sync_engine_version(profile: Profile, engine: str) -> bool:
+    """Claim the Chrome version the engine really is.
+
+    A UA saying Chrome 128 on a 151 engine is caught by plain feature detection
+    (APIs that only exist in newer builds) and by the Client Hints the binary
+    sends itself — GoLogin picks the Orbita build matching the UA for exactly
+    this reason. We go the other way: move the claim to the engine. Returns
+    whether the profile changed (callers persist it)."""
+    version = engine_chrome_version(engine)
+    return bool(version) and fp_mod.set_chrome_version(profile.fingerprint, version)
+
+
+def _sync_and_save(profile: Profile, store, engine: str) -> None:
+    if sync_engine_version(profile, engine):
+        try:
+            store.save(profile)
+        except Exception:  # noqa: BLE001 - e.g. a locked vault: still launch coherent
+            pass
+
+
+def cloak_identity_args(profile: Profile, user_data_dir) -> list[str]:
+    """CloakBrowser flags that present the profile's own fingerprint.
+
+    The seed pins everything Persona doesn't model (canvas/WebGL/audio noise,
+    font metrics) to this profile. A profile CloakBrowser already opened keeps
+    the seed it was given then — re-seeding it would swap the device under a
+    logged-in session. The UA isn't passed: the binary builds UA *and* Client
+    Hints from its own Chromium version, so the two always agree.
+    """
+    fp = profile.fingerprint
+    args: list[str] = []
+    if not (Path(user_data_dir) / CLOAK_SEED_FILE).exists() and fp.seed:
+        args.append(f"--fingerprint={CLOAK_SEED_MIN + fp.seed % CLOAK_SEED_SPAN}")
+    plat = CLOAK_PLATFORMS.get(fp.os)
+    if plat is None:
+        return args          # Linux/Android: CloakBrowser can't present these
+    args += [
+        f"--fingerprint-platform={plat}",
+        f"--fingerprint-hardware-concurrency={fp.hardware_concurrency}",
+        f"--fingerprint-device-memory={fp_mod.navigator_device_memory(fp.device_memory):g}",
+        f"--fingerprint-screen-width={fp.screen_width}",
+        f"--fingerprint-screen-height={fp.screen_height}",
+    ]
+    if fp.webgl_vendor and fp.webgl_renderer:
+        args += [f"--fingerprint-gpu-vendor={fp.webgl_vendor}",
+                 f"--fingerprint-gpu-renderer={fp.webgl_renderer}"]
+    return args
+
+
+CAMOUFOX_OS = {"windows": "windows", "macos": "macos", "linux": "linux"}
+
+
+def camoufox_fingerprint(profile: Profile, user_data_dir) -> dict:
+    """The profile's Camoufox (Firefox) fingerprint — generated once, then reused.
+
+    Without a pinned fingerprint Camoufox salts every launch randomly, so each
+    session would be a brand-new device. Camoufox derives fonts, voices, GPU and
+    noise seeds from the fingerprint it's given, so pinning this pins them all.
+    """
+    path = Path(user_data_dir) / CAMOUFOX_FP_FILE
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass   # unreadable pin: regenerate below (a new device, unavoidable)
+    from camoufox.fingerprints import Screen, generate_fingerprint
+
+    fp = profile.fingerprint
+    os_hint = CAMOUFOX_OS.get(fp.os, "windows")
+    try:
+        # Keep the screen Persona chose as the upper bound, so the generated
+        # device is no bigger than the profile says.
+        gen = generate_fingerprint(os=os_hint, screen=Screen(
+            max_width=fp.screen_width, max_height=fp.screen_height))
+    except Exception:
+        gen = generate_fingerprint(os=os_hint)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(gen), encoding="utf-8")
+    tmp.replace(path)
+    return gen
 
 
 def register(name: str, requires: Optional[str] = None):
@@ -174,7 +409,7 @@ def session(profile: Profile, store, engine: Optional[str] = None,
 # Shared Playwright-style launch (used by both playwright and patchright).
 # --------------------------------------------------------------------------
 def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: bool,
-                            keep_open: bool, extra_args=None):
+                            keep_open: bool, extra_args=None, engine: str = "playwright"):
     fp = profile.fingerprint
     launch_args = [
         f"--window-size={fp.viewport_width},{fp.viewport_height}",
@@ -182,19 +417,22 @@ def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: 
         "--no-first-run",
         "--no-default-browser-check",
         *_webrtc_arg(profile),
+        *_dns_lockdown_arg(profile),
         *_extension_args(profile),
+        *profile_launch_args(profile)[0],
         *(extra_args or []),
     ]
-    geolocation = _geolocation_for(profile)
+    geo = launch_geo(profile)
+    geolocation = geo["geolocation"]
     context_opts: dict = {
         "user_agent": fp.user_agent,
         "locale": fp.locale,
-        "timezone_id": fp.timezone,
+        "timezone_id": geo["timezone"],
         "viewport": {"width": fp.viewport_width, "height": fp.viewport_height},
         "screen": {"width": fp.screen_width, "height": fp.screen_height},
         "is_mobile": fp.is_mobile,
         "has_touch": fp.is_mobile,
-        "device_scale_factor": 2.625 if fp.is_mobile else 1,
+        "device_scale_factor": fp_mod.pixel_ratio(fp),
         "extra_http_headers": {
             "sec-ch-ua": fp_mod.sec_ch_ua(fp),
             "sec-ch-ua-platform": fp.ch_platform,
@@ -206,7 +444,7 @@ def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: 
         },
     }
     if profile.proxy:
-        context_opts["proxy"] = profile.proxy.to_playwright()
+        context_opts["proxy"] = browser_proxy(profile.proxy).to_playwright()
     if geolocation:
         # Grant the permission too, so a site that asks gets the coordinates
         # rather than a prompt that would stall an unattended session.
@@ -225,6 +463,7 @@ def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: 
     )
     context.add_init_script(build_init_script(fp))
     page = context.pages[0] if context.pages else context.new_page()
+    _apply_ua_metadata(context, page, fp, engine_chrome_version(engine))
     _open_startup_urls(context, page, profile)
 
     if keep_open:
@@ -241,6 +480,7 @@ def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: 
 @register("playwright", requires="playwright")
 def _driver_playwright(profile, store, headless=False, keep_open=True, extra_args=None):
     from playwright.sync_api import sync_playwright
+    _sync_and_save(profile, store, "playwright")
     return _launch_playwright_like(sync_playwright, profile, store, headless, keep_open, extra_args)
 
 
@@ -248,7 +488,9 @@ def _driver_playwright(profile, store, headless=False, keep_open=True, extra_arg
 def _driver_patchright(profile, store, headless=False, keep_open=True, extra_args=None):
     # Patchright is an API-compatible, patched drop-in for Playwright.
     from patchright.sync_api import sync_playwright
-    return _launch_playwright_like(sync_playwright, profile, store, headless, keep_open, extra_args)
+    _sync_and_save(profile, store, "patchright")
+    return _launch_playwright_like(sync_playwright, profile, store, headless, keep_open, extra_args,
+                                   engine="patchright")
 
 
 @register("camoufox", requires="camoufox")
@@ -264,15 +506,22 @@ def _driver_camoufox(profile, store, headless=False, keep_open=True, extra_args=
 
     fp = profile.fingerprint
     os_hint = {"windows": "windows", "macos": "macos", "linux": "linux"}.get(fp.os, "windows")
+    user_data = store.user_data_path(profile.id)
     kwargs: dict = {
         "headless": headless,
         "os": os_hint,
         "locale": fp.locale,
         "persistent_context": True,
-        "user_data_dir": str(store.user_data_path(profile.id)),
+        "user_data_dir": str(user_data),
+        # Same device every launch (Camoufox would otherwise re-roll it).
+        "fingerprint": camoufox_fingerprint(profile, user_data),
+        "i_know_what_im_doing": True,   # silences the custom-fingerprint warning
     }
+    own_args = profile_launch_args(profile)[0]
+    if own_args:
+        kwargs["args"] = own_args            # Firefox flags, for this engine
     if profile.proxy:
-        kwargs["proxy"] = profile.proxy.to_playwright()
+        kwargs["proxy"] = browser_proxy(profile.proxy).to_playwright()
         kwargs["geoip"] = True  # align timezone/locale to the proxy exit IP
 
     with Camoufox(**kwargs) as browser:
@@ -294,22 +543,47 @@ def _driver_cloak(profile, store, headless=False, keep_open=True, extra_args=Non
     """
     import cloakbrowser
 
+    _sync_and_save(profile, store, "cloak")
     fp = profile.fingerprint
+    user_data = store.user_data_path(profile.id)
+    # Headed: no emulated viewport — the page tracks the real window, which keeps
+    # outerWidth >= innerWidth coherent (CloakBrowser's own guidance). Passing
+    # no_viewport also stops it maximizing, which on a display bigger than the
+    # spoofed screen would make the window larger than the "screen"; the
+    # --window-size below keeps it inside.
+    # The binary ignores --force-device-scale-factor and takes the DPR from the
+    # real display, so headless (no display) gets it emulated with the viewport;
+    # headed shows the host's own ratio — the trust check flags a mismatch, e.g.
+    # a macOS profile on a non-HiDPI screen.
+    window: dict = ({"viewport": {"width": fp.viewport_width, "height": fp.viewport_height},
+                     "device_scale_factor": fp_mod.pixel_ratio(fp)}
+                    if headless else {"no_viewport": True})
+    geo = launch_geo(profile)
+    geo_opts: dict = {}
+    if geo["geolocation"]:
+        # Without this a granted prompt would hand the site the host's real fix.
+        geo_opts = {"geolocation": geo["geolocation"], "permissions": ["geolocation"]}
+    # We resolved the exit IP ourselves: hand it to WebRTC directly. Only when we
+    # couldn't (e.g. SOCKS) let CloakBrowser try its own lookup for WebRTC.
+    webrtc_ip = [f"--fingerprint-webrtc-ip={geo['ip']}"] if geo["ip"] else []
     context = cloakbrowser.launch_persistent_context(
-        user_data_dir=str(store.user_data_path(profile.id)),
+        user_data_dir=str(user_data),
         headless=headless,
-        proxy=profile.proxy.to_playwright() if profile.proxy else None,
-        user_agent=fp.user_agent,
-        viewport={"width": fp.viewport_width, "height": fp.viewport_height},
+        proxy=browser_proxy(profile.proxy).to_playwright() if profile.proxy else None,
+        **window,
         locale=fp.locale,
-        timezone=fp.timezone,
-        geoip=bool(profile.proxy),   # align timezone/locale to the proxy exit IP
+        timezone=geo["timezone"],     # the exit IP's zone, not the stored one
+        geoip=bool(profile.proxy) and not geo["ip"],
+        **geo_opts,
         # CloakBrowser launches with --no-sandbox (its stealth args), which makes
         # Chromium show a local "unsupported command-line flag" infobar. --test-type
         # hides that purely-cosmetic bar; it isn't visible to websites (JS can't
         # read command-line flags), so it doesn't affect the fingerprint.
         args=["--test-type", "--no-first-run", "--no-default-browser-check",
-              *_webrtc_arg(profile), *_extension_args(profile), *(extra_args or [])],
+              *cloak_identity_args(profile, user_data), *webrtc_ip,
+              f"--window-size={fp.viewport_width},{fp.viewport_height}",
+              *_webrtc_arg(profile), *_dns_lockdown_arg(profile),
+              *_extension_args(profile), *profile_launch_args(profile)[0], *(extra_args or [])],
     )
     page = context.pages[0] if context.pages else context.new_page()
     _open_startup_urls(context, page, profile)

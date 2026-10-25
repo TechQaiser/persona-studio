@@ -15,3 +15,6 @@ node_modules/
 .DS_Store
 # persona launcher marker
 .persona_setup_done
+
+# Local research notes (not for the public repo)
+gologin-*.md

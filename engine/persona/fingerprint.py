@@ -126,7 +126,7 @@ def generate(
         microphones = rng.choice([0, 1, 1, 1, 2]) if cameras else rng.choice([0, 1])
 
     ua_token = _android_token(device) if device else None
-    return Fingerprint(
+    fp = Fingerprint(
         os=os_key,
         user_agent=_build_user_agent(os_key, chrome, ua_token),
         platform=devices.NAV_PLATFORM[os_key],
@@ -149,6 +149,64 @@ def generate(
         cameras=cameras,
         microphones=microphones,
     )
+    fp.device_scale_factor = archetype_dpr(fp)
+    return fp
+
+
+def set_chrome_version(fp: Fingerprint, version: str) -> bool:
+    """Make the profile claim this Chrome major (UA + Client Hints follow
+    ``chrome_version``). Uses the reduced form real Chrome sends (``151.0.0.0``).
+    Returns whether anything changed."""
+    major = str(version).split(".")[0]
+    if not major.isdigit() or fp.chrome_version.split(".")[0] == major:
+        return False
+    fp.chrome_version = f"{major}.0.0.0"
+    phone = android_device(fp)
+    fp.user_agent = _build_user_agent(fp.os, fp.chrome_version,
+                                      _android_token(phone) if phone else None)
+    return True
+
+
+def android_device(fp: Fingerprint) -> Optional[dict]:
+    """The handset bundle an Android fingerprint was drawn from (via its UA)."""
+    if fp.os != "android":
+        return None
+    for d in devices.ANDROID_DEVICES:
+        if f"; {d['model']})" in fp.user_agent:
+            return d
+    return None
+
+
+def archetype_dpr(fp: Fingerprint) -> float:
+    """The devicePixelRatio a real device with this fingerprint has."""
+    phone = android_device(fp)
+    if phone:
+        return phone["dpr"]
+    if fp.os == "android":
+        return 2.625                          # unknown handset: the commonest
+    table = devices.DESKTOP_DPR.get(fp.os, {"default": 1.0})
+    return table.get((fp.screen_width, fp.screen_height), table["default"])
+
+
+def pixel_ratio(fp: Fingerprint) -> float:
+    """What the profile presents as ``window.devicePixelRatio``.
+
+    Deliberately *not* GoLogin's "+0.00000001 on whole numbers" trick: a real
+    Retina Mac reports exactly ``2``, so a 2.00000001 is itself a tell."""
+    return fp.device_scale_factor or archetype_dpr(fp)
+
+
+def navigator_device_memory(ram_gb: float) -> float:
+    """What Chrome's ``navigator.deviceMemory`` reports for a machine with this RAM.
+
+    The spec rounds down to a power of two and caps at 8, so a 16 GB laptop
+    reads ``8`` and a 6 GB phone reads ``4``. Presenting the raw RAM (``16``) is
+    a value no real Chrome can produce — an instant tell.
+    """
+    for v in (8, 4, 2, 1, 0.5):
+        if ram_gb >= v:
+            return v
+    return 0.25
 
 
 def sec_ch_ua(fp: Fingerprint) -> str:
@@ -249,5 +307,16 @@ def validate(fp: Fingerprint) -> list[str]:
         issues.append("media device counts cannot be negative")
     elif fp.is_mobile and (fp.cameras == 0 or fp.microphones == 0):
         issues.append("a phone with no camera or microphone is implausible")
+
+    # devicePixelRatio has to fit the device: Macs are Retina, phones carry their
+    # panel's exact ratio, and Windows/Linux only offer the display-settings steps.
+    dpr = pixel_ratio(fp)
+    phone = android_device(fp)
+    if phone and abs(dpr - phone["dpr"]) > 1e-6:
+        issues.append(f"devicePixelRatio {dpr:g} is not a {phone['model']}'s ({phone['dpr']:g})")
+    elif fp.os == "macos" and dpr < 2:
+        issues.append(f"devicePixelRatio {dpr:g} on macOS (every current Mac is Retina, 2)")
+    elif fp.os in ("windows", "linux") and dpr not in devices.DESKTOP_DPR_STEPS:
+        issues.append(f"devicePixelRatio {dpr:g} is not a {fp.os} display-scaling step")
 
     return issues

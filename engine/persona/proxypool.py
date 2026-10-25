@@ -95,13 +95,20 @@ def check(proxy: dict, timeout: float = 12) -> dict:
     """Route a real request through the proxy and report the exit IP/country.
 
     Uses urllib directly (no browser), which keeps a pool health-check fast.
-    SOCKS proxies need a SOCKS-aware transport we don't want to hard-depend on,
-    so those are reported as 'needs the profile proxy test' rather than failed.
+    SOCKS5 goes through the local bridge (``bridge.py``) urllib can talk to;
+    SOCKS4 is still reported as 'needs the profile proxy test' rather than failed.
     """
-    if str(proxy.get("type", "HTTP")).upper().startswith("SOCKS"):
-        return {"ok": None, "error": "SOCKS — test it via a profile's proxy test"}
+    kind = str(proxy.get("type", "HTTP")).upper()
+    if kind == "SOCKS4":
+        return {"ok": None, "error": "SOCKS4 — test it via a profile's proxy test"}
+    url = _proxy_url(proxy)
+    if kind.startswith("SOCKS"):
+        from .bridge import bridge_for
+        from .models import Proxy
+        url = bridge_for(Proxy(server=f"socks5://{proxy['host']}:{proxy['port']}",
+                               username=proxy.get("user"), password=proxy.get("pass"))).url
 
-    handler = urllib.request.ProxyHandler({"http": _proxy_url(proxy), "https": _proxy_url(proxy)})
+    handler = urllib.request.ProxyHandler({"http": url, "https": url})
     opener = urllib.request.build_opener(handler)
     opener.addheaders = [("User-Agent", "persona-proxy-check/1.0")]
     started = time.time()

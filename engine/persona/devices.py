@@ -13,7 +13,10 @@ Chrome/Safari versions periodically to stay current.
 from __future__ import annotations
 
 # Recent stable Chrome major versions. Keep the newest 3-4 to look up-to-date.
-CHROME_VERSIONS = ["125.0.0.0", "126.0.0.0", "127.0.0.0", "128.0.0.0"]
+# This is only the starting claim: at launch the profile moves to the version
+# its engine really runs (drivers.sync_engine_version), since a UA older or
+# newer than the engine is caught by feature detection.
+CHROME_VERSIONS = ["148.0.0.0", "149.0.0.0", "150.0.0.0", "151.0.0.0"]
 
 # WebGL unmasked vendor/renderer strings, grouped by OS so we never leak an
 # Apple GPU on Windows or an NVIDIA card on a Mac.
@@ -172,21 +175,35 @@ FONTS = {
 # screen size, the GPU and the RAM all describe the *same* handset — a "Pixel 7"
 # UA reporting an Adreno GPU on a 360x640 screen is an instant tell. The
 # generator picks one of these whole, rather than mixing parts across phones.
-# (screen is CSS pixels — what a phone browser reports for screen.width/height.)
+# (screen is CSS pixels — what a phone browser reports for screen.width/height;
+# dpr is the panel's devicePixelRatio, so screen x dpr = the real panel.)
 ANDROID_DEVICES = [
-    {"model": "Pixel 7", "android": "13", "screen": (412, 915), "cores": 8, "memory": 8,
+    {"model": "Pixel 7", "dpr": 2.625, "android": "13", "screen": (412, 915), "cores": 8, "memory": 8,
      "webgl": ("Google Inc. (ARM)", "ANGLE (ARM, Mali-G710, OpenGL ES 3.2)")},
-    {"model": "Pixel 8", "android": "14", "screen": (412, 915), "cores": 9, "memory": 8,
+    {"model": "Pixel 8", "dpr": 2.625, "android": "14", "screen": (412, 915), "cores": 9, "memory": 8,
      "webgl": ("Google Inc. (ARM)", "ANGLE (ARM, Mali-G715, OpenGL ES 3.2)")},
-    {"model": "Pixel 6", "android": "13", "screen": (393, 851), "cores": 8, "memory": 8,
+    {"model": "Pixel 6", "dpr": 2.75, "android": "13", "screen": (393, 851), "cores": 8, "memory": 8,
      "webgl": ("Google Inc. (ARM)", "ANGLE (ARM, Mali-G78, OpenGL ES 3.2)")},
-    {"model": "SM-G991B", "android": "13", "screen": (360, 800), "cores": 8, "memory": 8,
+    {"model": "SM-G991B", "dpr": 3.0, "android": "13", "screen": (360, 800), "cores": 8, "memory": 8,
      "webgl": ("Google Inc. (ARM)", "ANGLE (ARM, Mali-G78, OpenGL ES 3.2)")},        # Galaxy S21
-    {"model": "SM-S908B", "android": "14", "screen": (384, 854), "cores": 8, "memory": 12,
+    {"model": "SM-S908B", "dpr": 3.75, "android": "14", "screen": (384, 854), "cores": 8, "memory": 12,
      "webgl": ("Google Inc. (Qualcomm)", "ANGLE (Qualcomm, Adreno (TM) 730, OpenGL ES 3.2)")},  # Galaxy S22 Ultra
-    {"model": "M2101K6G", "android": "13", "screen": (393, 873), "cores": 8, "memory": 6,
+    {"model": "M2101K6G", "dpr": 2.75, "android": "13", "screen": (393, 873), "cores": 8, "memory": 6,
      "webgl": ("Google Inc. (ARM)", "ANGLE (ARM, Mali-G77 MC9, OpenGL ES 3.2)")},    # Redmi Note 10
 ]
+
+# devicePixelRatio per desktop screen. Every modern Mac is Retina (2), so a Mac
+# reporting 1 is a tell. On Windows the CSS size gives the scaling away: 1536x864
+# *is* a 1920x1080 panel at 125%, the default on most laptops; the other common
+# sizes are 100%. Linux desktops overwhelmingly run unscaled.
+DESKTOP_DPR = {
+    "macos": {"default": 2.0},
+    "windows": {(1536, 864): 1.25, (1280, 720): 1.5, "default": 1.0},
+    "linux": {"default": 1.0},
+}
+# Scale factors real Windows / Linux display settings offer.
+DESKTOP_DPR_STEPS = (1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5)
+
 
 # The four desktop-capable operating systems we generate by default.
 DESKTOP_OS = ["windows", "macos", "linux"]
