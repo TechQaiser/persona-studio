@@ -55,3 +55,16 @@ def test_validate_tolerates_missing_id():
     d = {k: v for k, v in BASE.items() if k != "id"}
     # should not raise even without an id (used by the /validate endpoint)
     assert isinstance(dashboard_coherence(d), list)
+
+
+def test_legacy_dashboard_gpu_labels_become_real_renderer_strings():
+    # Labels older dashboards wrote are not what any Chrome reports.
+    d = dict(BASE, webglRenderer="ANGLE (NVIDIA GeForce RTX 3060 Direct3D11)",
+             webglVendor="Google Inc. (NVIDIA)")
+    fp = to_engine_profile(d).fingerprint
+    assert fp.webgl_renderer == "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)"
+    mac = dict(BASE, os="macOS", webglRenderer="ANGLE (Apple M1, OpenGL 4.1)",
+               webglVendor="Google Inc. (NVIDIA)")      # stale vendor from an OS switch
+    fp = to_engine_profile(mac).fingerprint
+    assert fp.webgl_renderer.startswith("ANGLE (Apple, ANGLE Metal Renderer: Apple M1")
+    assert fp.webgl_vendor == "Google Inc. (Apple)"

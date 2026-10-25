@@ -31,11 +31,16 @@ WEBGL = {
         ("Google Inc. (AMD)",
          "ANGLE (AMD, AMD Radeon RX 6600 Direct3D11 vs_5_0 ps_5_0, D3D11)"),
     ],
+    # Chrome on macOS has rendered WebGL through ANGLE's Metal backend since
+    # ~115, so a current Chrome reports a Metal renderer. The older "OpenGL 4.1"
+    # strings belong to an old browser (see LEGACY_RENDERERS below).
     "macos": [
-        ("Google Inc. (Apple)", "ANGLE (Apple, Apple M1, OpenGL 4.1)"),
-        ("Google Inc. (Apple)", "ANGLE (Apple, Apple M2, OpenGL 4.1)"),
+        ("Google Inc. (Apple)",
+         "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)"),
+        ("Google Inc. (Apple)",
+         "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"),
         ("Google Inc. (Intel)",
-         "ANGLE (Intel, Intel(R) Iris(TM) Plus Graphics OpenGL Engine, OpenGL 4.1)"),
+         "ANGLE (Intel, ANGLE Metal Renderer: Intel(R) Iris(TM) Plus Graphics, Unspecified Version)"),
     ],
     "linux": [
         ("Google Inc. (NVIDIA)",
@@ -53,6 +58,26 @@ WEBGL = {
         ("Google Inc. (ARM)", "ANGLE (ARM, Mali-G715, OpenGL ES 3.2)"),
         ("Google Inc. (ARM)", "ANGLE (ARM, Mali-G77 MC9, OpenGL ES 3.2)"),
     ],
+}
+
+# Renderer strings older Persona versions wrote, mapped to what a current Chrome
+# reports for the same GPU. The dashboard used short labels that no real browser
+# produces; macOS profiles carried pre-Metal OpenGL strings.
+LEGACY_RENDERERS = {
+    "ANGLE (NVIDIA GeForce RTX 3060 Direct3D11)": WEBGL["windows"][0],
+    "ANGLE (NVIDIA GeForce GTX 1660 Ti Direct3D11)": WEBGL["windows"][1],
+    "ANGLE (Intel UHD Graphics 630 Direct3D11)": WEBGL["windows"][2],
+    "ANGLE (AMD Radeon RX 6600 Direct3D11)": WEBGL["windows"][3],
+    "ANGLE (Apple M1, OpenGL 4.1)": WEBGL["macos"][0],
+    "ANGLE (Apple M2, OpenGL 4.1)": WEBGL["macos"][1],
+    "ANGLE (Intel Iris Plus Graphics, OpenGL 4.1)": WEBGL["macos"][2],
+    "ANGLE (Apple, Apple M1, OpenGL 4.1)": WEBGL["macos"][0],
+    "ANGLE (Apple, Apple M2, OpenGL 4.1)": WEBGL["macos"][1],
+    "ANGLE (Intel, Intel(R) Iris(TM) Plus Graphics OpenGL Engine, OpenGL 4.1)": WEBGL["macos"][2],
+    "ANGLE (NVIDIA GeForce GTX 1050 Ti, OpenGL 4.5)": WEBGL["linux"][0],
+    "ANGLE (Mesa Intel UHD Graphics, OpenGL 4.6)": WEBGL["linux"][1],
+    "ANGLE (Qualcomm Adreno 660, OpenGL ES 3.2)": WEBGL["android"][0],
+    "ANGLE (ARM Mali-G78, OpenGL ES 3.2)": WEBGL["android"][2],
 }
 
 # Common desktop screen resolutions (width, height) per OS.

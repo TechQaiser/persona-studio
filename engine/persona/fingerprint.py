@@ -229,7 +229,8 @@ def webgl_plausible(os_key: str, vendor: str, renderer: str) -> bool:
     The curated pool in :mod:`devices` can't list every real GPU — there are
     thousands. So on top of "is it one we generate?", we accept any renderer
     whose API shape matches the OS: Windows drives WebGL through Direct3D
-    (ANGLE/D3D11), while macOS and Linux go through desktop OpenGL. This lets a
+    (ANGLE/D3D11), macOS through Metal (or OpenGL on older Chrome) and Linux
+    through desktop OpenGL. This lets a
     profile carry the machine's *actual* GPU (e.g. after `persona align`)
     without being flagged as incoherent, while still catching an Apple GPU
     pretending to be on Windows.
@@ -241,10 +242,14 @@ def webgl_plausible(os_key: str, vendor: str, renderer: str) -> bool:
         return False
     is_d3d = "direct3d" in r or "d3d11" in r or "d3d9" in r
     is_gl = "opengl" in r
+    is_metal = "metal" in r
     if os_key == "windows":
         return is_d3d
     if os_key == "macos":
-        return is_gl and not is_d3d and ("apple" in r or "intel" in r or "amd" in r or "metal" in r or "opengl 4" in r)
+        return (is_gl or is_metal) and not is_d3d and (
+            "apple" in r or "intel" in r or "amd" in r or is_metal or "opengl 4" in r)
+    if is_metal:
+        return False
     if os_key == "linux":
         return is_gl and not is_d3d
     if os_key == "android":

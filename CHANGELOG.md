@@ -19,6 +19,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   resolver. Before, DNS leaks were only *detected* (`persona dns`), never prevented.
 
 ### Fixed
+- **GPU strings no real Chrome reports.** The dashboard's GPU picker used short
+  labels (`ANGLE (NVIDIA GeForce RTX 3060 Direct3D11)`) and sent them to the
+  browser as-is, while real Chrome reports `ANGLE (NVIDIA, NVIDIA GeForce RTX
+  3060 Direct3D11 vs_5_0 ps_5_0, D3D11)`. The picker now offers the exact
+  strings, and profiles saved with an old label are upgraded on launch. Picking
+  a GPU or switching OS also updates the WebGL vendor to match.
+- **macOS GPUs are Metal now.** Chrome on macOS renders WebGL through ANGLE's
+  Metal backend, so it reports `ANGLE (Apple, ANGLE Metal Renderer: Apple M1,
+  Unspecified Version)`. New macOS profiles use those strings, old OpenGL 4.1
+  ones are upgraded, and the coherence check accepts Metal on macOS only.
+- Dashboard: new and bulk-created profiles start on Chrome 148–151 like the
+  engine, instead of 125–128.
 - **Same device on every launch (Camoufox).** Camoufox salted each launch
   randomly, so a profile came up as a new device every session (a different
   screen each time in testing). Each profile's Camoufox fingerprint is now

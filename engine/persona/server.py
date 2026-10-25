@@ -197,6 +197,9 @@ def _engine_webgl(os_key: str, dash_renderer: str, dash_vendor: str = "") -> tup
     vendor = (dash_vendor or "").strip()
     if not renderer:
         return (devices.WEBGL.get(os_key) or devices.WEBGL["windows"])[0]
+    if renderer in devices.LEGACY_RENDERERS:
+        # A label no current Chrome reports: send the real string instead.
+        return devices.LEGACY_RENDERERS[renderer]
     return (vendor or _vendor_for(renderer)), renderer
 
 

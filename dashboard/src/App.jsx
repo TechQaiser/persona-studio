@@ -58,25 +58,27 @@ const WARMUP_PRESETS = [
 
 /* ---- device data (mirrors persona/devices.py) -------------------- */
 const OS_LIST = ["Windows", "macOS", "Linux", "Android"];
+// Exactly what a current Chrome reports (ANGLE): the string goes to the
+// browser as-is, so a label of our own would be a tell.
 const GPUS = {
   Windows: [
-    "ANGLE (NVIDIA GeForce RTX 3060 Direct3D11)",
-    "ANGLE (NVIDIA GeForce GTX 1660 Ti Direct3D11)",
-    "ANGLE (Intel UHD Graphics 630 Direct3D11)",
-    "ANGLE (AMD Radeon RX 6600 Direct3D11)",
+    "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "ANGLE (AMD, AMD Radeon RX 6600 Direct3D11 vs_5_0 ps_5_0, D3D11)",
   ],
   macOS: [
-    "ANGLE (Apple M1, OpenGL 4.1)",
-    "ANGLE (Apple M2, OpenGL 4.1)",
-    "ANGLE (Intel Iris Plus Graphics, OpenGL 4.1)",
+    "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)",
+    "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)",
+    "ANGLE (Intel, ANGLE Metal Renderer: Intel(R) Iris(TM) Plus Graphics, Unspecified Version)",
   ],
   Linux: [
-    "ANGLE (NVIDIA GeForce GTX 1050 Ti, OpenGL 4.5)",
-    "ANGLE (Mesa Intel UHD Graphics, OpenGL 4.6)",
+    "ANGLE (NVIDIA, NVIDIA GeForce GTX 1050 Ti/PCIe/SSE2, OpenGL 4.5)",
+    "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL 4.6)",
   ],
   Android: [
-    "ANGLE (Qualcomm Adreno 660, OpenGL ES 3.2)",
-    "ANGLE (ARM Mali-G78, OpenGL ES 3.2)",
+    "ANGLE (Qualcomm, Adreno (TM) 660, OpenGL ES 3.2)",
+    "ANGLE (ARM, Mali-G78, OpenGL ES 3.2)",
   ],
 };
 const SCREENS = {
@@ -130,7 +132,7 @@ const ENGINE_META = {
 
 /* ---- coherence check (mirrors persona/fingerprint.validate) ------ */
 // A GPU is coherent if it's one we offer, or if its graphics API matches the OS
-// (Windows → Direct3D, macOS/Linux → desktop OpenGL). The second clause lets a
+// (Windows → Direct3D, macOS → Metal or OpenGL, Linux → desktop OpenGL). The second clause lets a
 // profile carry the machine's real GPU after "Auto-adjust" without a false flag.
 function webglPlausible(os, renderer) {
   if (!renderer) return true;
@@ -138,8 +140,10 @@ function webglPlausible(os, renderer) {
   const r = renderer.toLowerCase();
   const d3d = r.includes("direct3d") || r.includes("d3d11");
   const gl = r.includes("opengl");
+  const metal = r.includes("metal");
   if (os === "Windows") return d3d;
-  if (os === "macOS") return gl && !d3d;
+  if (os === "macOS") return (gl || metal) && !d3d;
+  if (metal) return false;
   if (os === "Linux") return gl && !d3d;
   if (os === "Android") return r.includes("opengl es") || r.includes("adreno") || r.includes("mali");
   return false;
@@ -186,7 +190,7 @@ function mk(name, folder, status, os, tags, country) {
   const locale = country && COUNTRY_LOCALE[country] ? COUNTRY_LOCALE[country] : "en-US";
   return {
     id: nid(), name, folder, status, os, tags, engine: "playwright",
-    browser: "Chrome", browserVersion: "128.0.0.0", userAgent: uaFor(os),
+    browser: "Chrome", browserVersion: "151.0.0.0", userAgent: uaFor(os),
     screen: SCREENS[os][0], cores: CORES[os][1], memory: RAM[os][1],
     webglVendor: os === "macOS" ? "Google Inc. (Apple)" : "Google Inc. (NVIDIA)",
     webglRenderer: GPUS[os][0],
@@ -198,7 +202,7 @@ function mk(name, folder, status, os, tags, country) {
     lastActive: status === "running" ? "now" : ["2h ago", "yesterday", "3d ago"][name.length % 3],
   };
 }
-function uaFor(os, chrome = "128.0.0.0") {
+function uaFor(os, chrome = "151.0.0.0") {
   const tok = { Windows: "Windows NT 10.0; Win64; x64", macOS: "Macintosh; Intel Mac OS X 10_15_7", Linux: "X11; Linux x86_64", Android: "Linux; Android 13; Pixel 7" }[os];
   const mob = os === "Android" ? " Mobile" : "";
   return `Mozilla/5.0 (${tok}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome}${mob} Safari/537.36`;
@@ -242,7 +246,7 @@ function vendorFor(renderer) {
     if (r.includes(tok)) return `Google Inc. (${name})`;
   return "Google Inc.";
 }
-const CHROME_VERSIONS = ["125.0.0.0", "126.0.0.0", "127.0.0.0", "128.0.0.0"];
+const CHROME_VERSIONS = ["148.0.0.0", "149.0.0.0", "150.0.0.0", "151.0.0.0"];   // mirrors devices.CHROME_VERSIONS
 
 // A fresh, coherent device identity for an OS — used when duplicating a profile
 // so the copy is a genuinely different machine, not a fingerprint twin of the
@@ -939,7 +943,7 @@ function newProfile(folder, defaultEngine = ENGINE_ORDER[0]) {
   const os = "Windows";
   return {
     id: nid(), name: "", folder: folder === "All profiles" ? "Facebook Ads" : folder,
-    status: "stopped", os, tags: [], engine: defaultEngine, browser: "Chrome", browserVersion: "128.0.0.0",
+    status: "stopped", os, tags: [], engine: defaultEngine, browser: "Chrome", browserVersion: "151.0.0.0",
     userAgent: uaFor(os), screen: SCREENS[os][0], cores: CORES[os][1], memory: RAM[os][1],
     webglVendor: "Google Inc. (NVIDIA)", webglRenderer: GPUS[os][0],
     canvas: "Noise", webrtc: "Altered", audio: "Noise", fonts: "Masked",
@@ -1022,7 +1026,7 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
   const [p, setP] = useState(profile);
   const [tab, setTab] = useState("general");
   const set = (patch) => setP(x => ({ ...x, ...patch }));
-  const changeOS = (os) => set({ os, userAgent: uaFor(os), screen: SCREENS[os][0], cores: CORES[os][1], memory: RAM[os][1], webglRenderer: GPUS[os][0] });
+  const changeOS = (os) => set({ os, userAgent: uaFor(os), screen: SCREENS[os][0], cores: CORES[os][1], memory: RAM[os][1], webglRenderer: GPUS[os][0], webglVendor: vendorFor(GPUS[os][0]) });
   const changeLocale = (locale) => set({ locale, timezone: LOCALES[locale] });
   const setProxy = (patch) => set({ proxy: { ...(p.proxy || { type: "HTTP", host: "", port: "", user: "", pass: "", country: "" }), ...patch } });
 
@@ -1233,7 +1237,7 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
                 </Field>
               </Row>
               <Field label="WebGL renderer (GPU)">
-                <select className="ps-in mono" value={p.webglRenderer} onChange={e => set({ webglRenderer: e.target.value })}>{[...new Set([p.webglRenderer, ...GPUS[p.os]])].map(g => <option key={g}>{g}</option>)}</select>
+                <select className="ps-in mono" value={p.webglRenderer} onChange={e => set({ webglRenderer: e.target.value, webglVendor: vendorFor(e.target.value) })}>{[...new Set([p.webglRenderer, ...GPUS[p.os]])].map(g => <option key={g}>{g}</option>)}</select>
               </Field>
 
               <SectionLabel icon={<Fingerprint size={13} />} text="Spoofing modes" />
@@ -1636,7 +1640,7 @@ function BulkModal({ onClose, onCreate, folder, defaultEngine }) {
     for (let i = 0; i < n; i++) {
       const os = oses[i % oses.length];
       const country = countries[Math.floor(i / oses.length) % countries.length];
-      const chrome = rnd(browsers) || "128.0.0.0";
+      const chrome = rnd(browsers) || "151.0.0.0";
       const gpu = pick(GPUS[os]);
       const locale = COUNTRY_LOCALE[country] || "en-US";
       list[i] = {

@@ -167,3 +167,18 @@ def test_real_screen_size_is_coherent():
     fp.screen_width, fp.screen_height = 3440, 1440
     fp.viewport_width, fp.viewport_height = 3440, 1400
     assert "screen resolution" not in " ".join(validate(fp))
+
+
+def test_metal_renderers_are_plausible_only_on_macos():
+    from persona.fingerprint import webgl_plausible
+    metal = "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Pro, Unspecified Version)"
+    assert webgl_plausible("macos", "Google Inc. (Apple)", metal)
+    assert not webgl_plausible("windows", "Google Inc. (Apple)", metal)
+    assert not webgl_plausible("linux", "Google Inc. (Apple)", metal)
+
+
+def test_generated_macos_profiles_use_current_metal_strings():
+    for seed in range(20):
+        fp = generate(os="macos", seed=seed)
+        assert "Metal Renderer" in fp.webgl_renderer
+        assert validate(fp) == []
