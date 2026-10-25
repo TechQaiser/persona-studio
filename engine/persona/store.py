@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import crypto
-from .locks import LOCK_FILE
+from . import history
 from .models import Profile
 
 
@@ -30,6 +30,7 @@ class ProfileStore:
         self.profiles_dir = self.root / "profiles"
         self.userdata_dir = self.root / "user-data"
         self.config_path = self.root / "config.json"
+        self.history_dir = self.root / "history"
         self.profiles_dir.mkdir(parents=True, exist_ok=True)
         self.userdata_dir.mkdir(parents=True, exist_ok=True)
         # The master password comes from the caller or the environment, so a
@@ -51,6 +52,13 @@ class ProfileStore:
     def save_config(self, cfg: dict) -> dict:
         self.config_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
         return cfg
+
+    def get_history_keep(self) -> int:
+        """How many session snapshots to keep per profile (0 turns history off)."""
+        try:
+            return max(0, int(self.get_config().get("history_keep", history.DEFAULT_KEEP)))
+        except (TypeError, ValueError):
+            return history.DEFAULT_KEEP
 
     def get_default_engine(self) -> str:
         """The engine used for new profiles when none is given (persisted)."""
@@ -188,6 +196,7 @@ class ProfileStore:
         if ud.exists():
             import shutil
             shutil.rmtree(ud, ignore_errors=True)
+        history.delete_all(self.history_dir, profile_id)
         return True
 
     # ---- import / export -------------------------------------------------
@@ -222,12 +231,10 @@ class ProfileStore:
         dest = Path(dest)
         with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
             z.writestr("profile.json", json.dumps(prof.to_dict(), indent=2))
-            ud = self.userdata_dir / profile_id
-            if ud.exists():
-                for f in ud.rglob("*"):
-                    # The session lock belongs to whoever has it open *now*.
-                    if f.is_file() and f.name != LOCK_FILE:
-                        z.write(f, arcname=str(Path("user-data") / f.relative_to(ud)))
+            # Caches the browser rebuilds, and the session lock, are left out
+            # (see history.session_files): they're most of the size and no state.
+            for f, rel in history.session_files(self.userdata_dir / profile_id):
+                z.write(f, arcname=str(Path("user-data") / rel))
         return dest
 
     def restore(self, src: str | Path, new_id: bool = False) -> Profile:

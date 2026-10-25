@@ -103,6 +103,10 @@ export const api = {
   duplicate: (id) => req("POST", `/api/profiles/${id}/duplicate`),
   // Per-profile activity log (launches, warm-ups, trust runs, …), newest first.
   activity: (id) => req("GET", `/api/profiles/${id}/activity`),
+  // Session history: snapshots saved when a session ends; restore rolls back.
+  history: (id) => req("GET", `/api/profiles/${id}/history`),
+  saveSnapshot: (id) => req("POST", `/api/profiles/${id}/history`),
+  restoreSnapshot: (id, sid) => req("POST", `/api/profiles/${id}/history/${encodeURIComponent(sid)}/restore`),
   // Health overview: coherence, proxy, cached trust grade and schedule per profile.
   health: () => req("GET", "/api/profiles/health"),
   // Fingerprint collisions: which profiles look like the same device.

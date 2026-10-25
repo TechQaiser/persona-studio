@@ -7,7 +7,7 @@ import {
   Settings, Boxes, Activity, MapPin, Clock, Camera, Mic, Blocks,
   RefreshCw, Server, Sparkles, ArrowRight, Star, Circle,
   Cookie, Download, Upload, Flame, Link2, Sun, Moon, Command,
-  HardDrive, FolderPlus, Palette, Info,
+  HardDrive, FolderPlus, Palette, Info, History, RotateCcw,
 } from "lucide-react";
 
 /* ================================================================== *
@@ -209,7 +209,15 @@ const ACT_LABEL = {
   launch: "Launched", "session-end": "Session ended", warmup: "Warmed up",
   trust: "Trust check", align: "Auto-adjusted", cookies: "Cookies imported",
   session: "Session checked", created: "Created",
+  snapshot: "Snapshot saved", restore: "Restored snapshot",
 };
+const SNAP_REASON = {
+  session: "after a session", warmup: "after warm-up", automation: "after automation",
+  manual: "saved by hand", "before-restore": "before a restore",
+};
+function fmtBytes(n) {
+  return n >= 1e9 ? (n / 1e9).toFixed(1) + " GB" : n >= 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1e3)) + " KB";
+}
 // Relative "time ago" from a unix timestamp (seconds), mirroring the server's.
 function relTime(ts) {
   if (!ts) return "";
@@ -1073,7 +1081,31 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
     catch (e) { toast.error("Session check failed: " + e.message); }
     setSessBusy(false);
   };
-  useEffect(() => { if (tab === "session") loadActivity(); }, [tab, p.id]);   // eslint-disable-line
+  // Session history: a snapshot is saved each time a session ends; restoring
+  // rolls cookies/storage back (and snapshots the current state first).
+  const [snaps, setSnaps] = useState(null);
+  const [snapBusy, setSnapBusy] = useState(null);   // snapshot id being restored, or "save"
+  const loadSnaps = async () => {
+    if (!cookiesReady) return;
+    try { setSnaps((await api.history(p.id)).snapshots || []); } catch { /* offline */ }
+  };
+  const saveSnap = async () => {
+    setSnapBusy("save");
+    try { await api.saveSnapshot(p.id); await loadSnaps(); await loadActivity(); toast.success("Snapshot saved"); }
+    catch (e) { toast.error("Couldn't save a snapshot: " + e.message); }
+    setSnapBusy(null);
+  };
+  const restoreSnap = async (s) => {
+    if (!window.confirm(`Roll this profile's session back to ${new Date(s.at * 1000).toLocaleString()}? Cookies and site data from after that are replaced. The current state is saved first, so you can undo this.`)) return;
+    setSnapBusy(s.id);
+    try {
+      const res = await api.restoreSnapshot(p.id, s.id);
+      setSnaps(res.snapshots || []); await loadActivity();
+      toast.success("Session restored");
+    } catch (e) { toast.error("Restore failed: " + e.message); }
+    setSnapBusy(null);
+  };
+  useEffect(() => { if (tab === "session") { loadActivity(); loadSnaps(); } }, [tab, p.id]);   // eslint-disable-line
 
   // Warm-up: pick a per-vertical site set, run it now, or schedule it to
   // recur unattended. The schedule for this profile (if any) is loaded live.
@@ -1414,6 +1446,37 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
                 <div className="ps-hint"><Cookie size={12} /> {p._new
                   ? "Save the profile first, then run a session check."
                   : "Session check needs the engine running — start it with persona serve."}</div>
+              )}
+
+              <SectionLabel icon={<History size={13} />} text="Session history" />
+              {!cookiesReady ? (
+                <div className="ps-hint"><History size={12} /> A snapshot of the session is kept each time the browser closes, once the profile is saved on a live server.</div>
+              ) : (
+                <>
+                  <button className="ps-btn ghost sm" disabled={!!snapBusy} onClick={saveSnap}>
+                    <Download size={13} /> {snapBusy === "save" ? "Saving…" : "Save snapshot now"}
+                  </button>
+                  {snaps === null ? (
+                    <div className="ps-hint"><Clock size={12} /> Loading…</div>
+                  ) : snaps.length === 0 ? (
+                    <div className="ps-hint"><History size={12} /> No snapshots yet. One is saved each time a session ends.</div>
+                  ) : (
+                    <div className="ps-timeline">
+                      {snaps.map(s => (
+                        <div key={s.id} className="ps-tl-row">
+                          <span className="ps-tl-dot" />
+                          <span className="ps-tl-kind">{new Date(s.at * 1000).toLocaleString()}</span>
+                          <span className="ps-tl-detail">{SNAP_REASON[s.reason] || s.reason} · {fmtBytes(s.size)}</span>
+                          <button className="ps-btn ghost sm" disabled={!!snapBusy || p.status === "running"}
+                            title={p.status === "running" ? "Stop the profile first" : "Roll the session back to this snapshot"}
+                            onClick={() => restoreSnap(s)}>
+                            <RotateCcw size={12} /> {snapBusy === s.id ? "Restoring…" : "Restore"}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
 
               <SectionLabel icon={<Activity size={13} />} text="Activity" />

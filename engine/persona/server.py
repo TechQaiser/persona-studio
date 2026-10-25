@@ -574,6 +574,7 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
             "folders": _folder_list(),
             "root": str(engine_store.root),
             "version": "0.1.0",
+            "history_keep": engine_store.get_history_keep(),
         }
 
     @app.put("/api/config")
@@ -584,6 +585,17 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
             if name not in drivers.names():
                 raise HTTPException(400, f"unknown engine '{name}'")
             engine_store.set_default_engine(name)
+        keep = cfg.get("history_keep")
+        if keep is not None:
+            try:
+                keep = int(keep)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "history_keep must be a whole number")
+            if not 0 <= keep <= 50:
+                raise HTTPException(400, "history_keep must be between 0 and 50")
+            conf = engine_store.get_config()
+            conf["history_keep"] = keep
+            engine_store.save_config(conf)
         return get_config()
 
     @app.post("/api/folders")
@@ -903,6 +915,40 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         dash.save(d)
         _log_activity(pid, "session", rep.get("status", ""))
         return rep
+
+    # ---- session history (snapshots taken when a session ends) ----------
+    @app.get("/api/profiles/{pid}/history")
+    def get_history(pid: str):
+        if not dash.get(pid):
+            raise HTTPException(404, "profile not found")
+        from . import history
+        return {"snapshots": history.list_snapshots(engine_store.history_dir, pid),
+                "keep": engine_store.get_history_keep()}
+
+    @app.post("/api/profiles/{pid}/history")
+    def save_snapshot(pid: str):
+        d = _prepare(pid)
+        from . import history
+        snap = history.snapshot(engine_store.user_data_path(pid), engine_store.history_dir,
+                                pid, keep=max(1, engine_store.get_history_keep()),
+                                reason="manual", force=True)
+        if not snap:
+            raise HTTPException(400, "nothing to save: this profile has no session yet")
+        _log_activity(d["id"], "snapshot", snap["id"])
+        return snap
+
+    @app.post("/api/profiles/{pid}/history/{sid}/restore")
+    def restore_snapshot(pid: str, sid: str):
+        d = _prepare(pid)                    # 409 if the profile is open
+        from . import history
+        try:
+            history.restore(engine_store.user_data_path(pid), engine_store.history_dir,
+                            pid, sid, keep=engine_store.get_history_keep())
+        except FileNotFoundError:
+            raise HTTPException(404, "snapshot not found")
+        _log_activity(d["id"], "restore", sid)
+        return {"ok": True, "restored": sid,
+                "snapshots": history.list_snapshots(engine_store.history_dir, pid)}
 
     @app.get("/api/profiles/{pid}/activity")
     def get_activity(pid: str):

@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -135,6 +136,45 @@ def cmd_unlock(args, store: ProfileStore) -> int:
         print(_c(f"Cleared the session lock on '{prof.name}'.", C.GRN))
     else:
         print(f"'{prof.name}' wasn't locked.")
+    return 0
+
+
+def cmd_history(args, store: ProfileStore) -> int:
+    from . import history, locks
+    prof = store.resolve(args.ref)
+    if not prof:
+        print(_c(f"No profile matching '{args.ref}'.", C.RED))
+        return 1
+    user_data = store.user_data_path(prof.id)
+    if args.restore:
+        if locks.holder(user_data):
+            print(_c(f"'{prof.name}' is open. Close it before restoring.", C.RED))
+            return 1
+        try:
+            history.restore(user_data, store.history_dir, prof.id, args.restore,
+                            keep=store.get_history_keep())
+        except FileNotFoundError as e:
+            print(_c(str(e), C.RED))
+            return 1
+        print(_c(f"Restored '{prof.name}' to {args.restore}. The previous state was "
+                 "saved as a 'before-restore' snapshot.", C.GRN))
+        return 0
+    if args.snapshot:
+        snap = history.snapshot(user_data, store.history_dir, prof.id,
+                                keep=max(1, store.get_history_keep()), reason="manual",
+                                force=True)
+        print(_c(f"Saved {snap['id']}." if snap else "Nothing to save: the session is empty.",
+                 C.GRN if snap else C.YEL))
+        return 0
+    snaps = history.list_snapshots(store.history_dir, prof.id)
+    if not snaps:
+        print(f"No snapshots for '{prof.name}' yet. One is saved each time a session ends.")
+        return 0
+    print(_c(f"Session history for '{prof.name}' (newest first):", C.B))
+    for s in snaps:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(s["at"]))
+        print(f"  {s['id']:<34} {when}  {s['size'] / 1e6:7.1f} MB  {s['reason']}")
+    print(_c(f"Restore one with: persona history {args.ref} --restore <id>", C.DIM))
     return 0
 
 
@@ -618,6 +658,8 @@ def cmd_attach(args, store: ProfileStore) -> int:
         finally:
             if pw:
                 pw.stop()
+    from .launcher import end_session
+    end_session(prof, store, reason="automation")
     return 0
 
 
@@ -855,6 +897,12 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--force", action="store_true",
                    help="Clear it even though the holding process is still alive")
     c.set_defaults(func=cmd_unlock)
+
+    c = sub.add_parser("history", help="List, save or restore session snapshots")
+    c.add_argument("ref")
+    c.add_argument("--restore", metavar="ID", help="Roll the session back to this snapshot")
+    c.add_argument("--snapshot", action="store_true", help="Save a snapshot now")
+    c.set_defaults(func=cmd_history)
 
     c = sub.add_parser("engines", help="List available launch engines")
     c.set_defaults(func=cmd_engines)

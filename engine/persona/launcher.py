@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from . import drivers
+from . import drivers, history
 from .models import Profile
 from .store import ProfileStore
 
@@ -33,4 +33,20 @@ def launch(profile: Profile, store: ProfileStore, headless: bool = False,
     """
     name = engine or profile.engine or "playwright"
     driver = drivers.get(name)
-    return driver(profile, store, headless=headless, keep_open=keep_open)
+    result = driver(profile, store, headless=headless, keep_open=keep_open)
+    if not keep_open:
+        end_session(profile, store)
+    return result
+
+
+def end_session(profile: Profile, store: ProfileStore, reason: str = "session") -> None:
+    """After the window closes: drop the caches the browser rebuilds, then keep
+    a snapshot of the session in the profile's history (see ``history.py``).
+    Best effort: a full disk must not turn a clean close into an error."""
+    user_data = store.user_data_path(profile.id)
+    try:
+        history.prune(user_data)
+        history.snapshot(user_data, store.history_dir, profile.id,
+                         keep=store.get_history_keep(), reason=reason)
+    except OSError as e:
+        print(f"Warning: couldn't save the session snapshot: {e}")

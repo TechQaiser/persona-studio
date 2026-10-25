@@ -57,6 +57,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   trust tools). A lock left by a crashed process is detected and taken over.
   The dashboard now shows a profile opened from a terminal as running, and
   refuses to open its session. `persona unlock <profile>` clears a lock by hand.
+- **Profile history** (`persona/history.py`). When a session ends (launch,
+  warm-up, automation), the caches the browser rebuilds by itself (HTTP cache,
+  code cache, GPU shader caches) are deleted, and the rest of the session is
+  saved as a zipped snapshot. The last 5 are kept (`history_keep` in Settings
+  or `PUT /api/config`, 0 turns it off). An unchanged session isn't saved twice.
+  Restore rolls cookies and site data back, and snapshots the current state
+  first so a restore can be undone. In the dashboard: editor **Session** tab →
+  *Session history*. From the CLI: `persona history <profile>`, with
+  `--snapshot` or `--restore <id>`. API: `GET/POST /api/profiles/{id}/history`,
+  `POST …/history/{snapshot}/restore`.
+- Backups leave out those same caches and the browser's lock files, so they're
+  much smaller.
 - **devicePixelRatio as part of the device.** Macs are 2, phones carry their
   panel's exact ratio (Pixel 7 2.625, Galaxy S21 3, …), and Windows 1536x864 is
   1.25 (a 1920x1080 laptop at 125%). Before, every desktop was 1, so every macOS

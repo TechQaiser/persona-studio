@@ -178,6 +178,8 @@ def warm_up(profile: Profile, store: ProfileStore, minutes: float = 5,
                 _browse_page(page, rng, budget * 0.4)
             _human_pause(rng, 1.0, 3.0)
 
+    from .launcher import end_session
+    end_session(profile, store, reason="warmup")
     return {"visited": visited, "pages": len(visited), "errors": errors,
             "minutes": round(minutes, 2),
             "preset": (preset or "general").lower() if not sites else "custom"}
