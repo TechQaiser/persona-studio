@@ -68,7 +68,8 @@ jobs:
           $v = "$env:TAG".TrimStart("v")
           $zip = "PersonaStudio-$v-windows-x64.zip"
           Compress-Archive -Path dist/PersonaStudio -DestinationPath $zip
-          (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() + "  $zip" | Out-File -Encoding ascii SHA256SUMS.txt
+          # LF line ending, so `sha256sum -c` works on Linux/macOS too.
+          [IO.File]::WriteAllText("$PWD/SHA256SUMS.txt", (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() + "  $zip`n")
           python packaging/release_notes.py $v notes.md
 
       - uses: softprops/action-gh-release@v2
