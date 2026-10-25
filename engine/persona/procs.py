@@ -42,7 +42,9 @@ def _command_lines() -> list[tuple[int, str]]:
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
         sep = "\t"
     else:
-        out = subprocess.run(["ps", "-eo", "pid=,args="], capture_output=True, text=True,
+        # -ww: no width limit. Without it ps cuts long command lines (a
+        # browser's always are) before the profile path.
+        out = subprocess.run(["ps", "-ww", "-eo", "pid=,args="], capture_output=True, text=True,
                              timeout=10).stdout
         sep = None
     rows = []
