@@ -62,7 +62,7 @@ A self-hosted alternative to GoLogin, Multilogin and AdsPower.
   that never comes up is stopped after 5 minutes, and browsers left running
   after a stop or crash are cleaned up.
 
-Full details in the [CHANGELOG](CHANGELOG.md#2026-10-25).
+Full details in the [CHANGELOG](CHANGELOG.md#020---2026-10-25).
 
 ---
 
@@ -141,6 +141,20 @@ persona-studio/
 | 🔗 **Startup URLs** | Each profile opens the pages you want, in its own tabs |
 | 🖱️ **One-click launcher** | `start.bat` installs everything and starts both halves on Windows |
 | ⌨️ **CLI + Python API** | Script it or drive it by hand |
+
+## Download (Windows)
+
+Grab **`PersonaStudio-<version>-windows-x64.zip`** from the
+[latest release](https://github.com/TechQaiser/persona-studio/releases/latest),
+unzip it anywhere and double-click **`PersonaStudio.exe`**. No Python or Node
+needed: it runs the engine and the dashboard together and opens
+http://localhost:8787 in your browser. The first start downloads the Chromium
+browser (about 170 MB). Keep its window open while you use Persona; close it to
+stop.
+
+The app bundles the Playwright, Patchright and CloakBrowser engines. Camoufox
+needs an install from source (below). `PersonaStudio.exe` also works as the
+CLI: `PersonaStudio.exe list`, `PersonaStudio.exe launch <profile>`.
 
 ## Quick start
 

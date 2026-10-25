@@ -2,7 +2,9 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## 2026-10-25
+## [Unreleased]
+
+## [0.2.0] - 2026-10-25
 
 ### Added
 - **Windows app** (`packaging/PersonaStudio.spec`, `persona/app.py`): one
@@ -190,7 +192,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   debugging port, extensions, Cloak seed) are dropped with a warning instead of
   silently undoing a guarantee.
 
-## [Unreleased] (earlier this cycle)
+## Earlier in the 0.2.0 cycle
 
 ### Added
 - **Mobile (Android) profiles**: fingerprint generation now assembles a whole
