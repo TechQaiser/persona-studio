@@ -1,11 +1,13 @@
 """
-Local proxy bridge for authenticated SOCKS5 upstreams (GoLogin's "gproxy").
+Local proxy bridge for authenticated SOCKS5 and for SOCKS4 upstreams (GoLogin's "gproxy").
 
 Chromium (and Playwright's Firefox) can't send a username/password to a SOCKS5
 proxy, so a profile with ``socks5://user:pass@host`` used to fail at launch. The
 bridge is a tiny HTTP proxy on ``127.0.0.1:<random port>``: the browser talks
 plain HTTP-proxy to it (no credentials), and it opens each connection through
-the real SOCKS5 server with the credentials.
+the real SOCKS5 server with the credentials. SOCKS4 goes through it too
+(spoken as SOCKS4a), so it behaves the same on every engine and in the pool's
+health check.
 
 Hostnames are handed to the SOCKS server unresolved (ATYP=domain), so name
 lookups happen at the proxy's end — no DNS leak from this machine. One bridge
@@ -30,10 +32,45 @@ _bridges: dict[tuple, "Bridge"] = {}
 _lock = threading.Lock()
 
 
+def _scheme(proxy: Proxy) -> str:
+    return proxy.server.lower().split("://", 1)[0] if "://" in proxy.server else "http"
+
+
 def needs_bridge(proxy: Optional[Proxy]) -> bool:
-    """SOCKS5 with credentials is the one case browsers can't do natively."""
-    return bool(proxy and proxy.username
-                and proxy.server.lower().split("://", 1)[0] in ("socks5", "socks5h"))
+    """SOCKS5 with credentials, which browsers can't send, and any SOCKS4,
+    whose support differs between engines."""
+    if not proxy:
+        return False
+    scheme = _scheme(proxy)
+    return scheme in ("socks4", "socks4a") or (
+        bool(proxy.username) and scheme in ("socks5", "socks5h"))
+
+
+def socks4_connect(upstream: tuple[str, int], user: str, host: str, port: int,
+                   timeout: float = 20) -> socket.socket:
+    """Open a TCP connection to host:port through a SOCKS4 server. Hostnames
+    use the SOCKS4a extension, so they're resolved at the proxy (no DNS leak).
+    SOCKS4 has no password, only a user id."""
+    s = socket.create_connection(upstream, timeout=timeout)
+    try:
+        uid = (user or "").encode() + b"\x00"
+        try:
+            ip = ipaddress.ip_address(host)
+            if ip.version != 4:
+                raise ConnectionError("SOCKS4 can't reach IPv6 addresses")
+            req = b"\x04\x01" + struct.pack(">H", port) + ip.packed + uid
+        except ValueError:                               # SOCKS4a: remote resolve
+            req = (b"\x04\x01" + struct.pack(">H", port) + b"\x00\x00\x00\x01" + uid
+                   + host.encode("idna") + b"\x00")
+        s.sendall(req)
+        reply = _recv(s, 8)
+        if reply[1] != 0x5A:
+            raise ConnectionError(f"SOCKS4 connect to {host}:{port} refused (code {reply[1]})")
+        s.settimeout(None)
+        return s
+    except Exception:
+        s.close()
+        raise
 
 
 def socks5_connect(upstream: tuple[str, int], user: str, password: str,
@@ -103,12 +140,13 @@ def _pipe(a: socket.socket, b: socket.socket) -> None:
 
 
 class Bridge:
-    """A loopback HTTP proxy forwarding through one authenticated SOCKS5 server."""
+    """A loopback HTTP proxy forwarding through one SOCKS4 or SOCKS5 server."""
 
     def __init__(self, proxy: Proxy):
         u = urlsplit(proxy.server)
         self.upstream = (u.hostname, u.port or 1080)
         self.user, self.password = proxy.username or "", proxy.password or ""
+        self.socks4 = _scheme(proxy) in ("socks4", "socks4a")
         self._srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._srv.bind(("127.0.0.1", 0))
         self._srv.listen(128)
@@ -128,6 +166,11 @@ class Bridge:
                 return                       # closed
             threading.Thread(target=self._handle, args=(client,), daemon=True).start()
 
+    def _connect(self, host: str, port: int) -> socket.socket:
+        if self.socks4:
+            return socks4_connect(self.upstream, self.user, host, port)
+        return socks5_connect(self.upstream, self.user, self.password, host, port)
+
     def _handle(self, client: socket.socket) -> None:
         try:
             head = b""
@@ -143,16 +186,14 @@ class Bridge:
             method, target, version = line.decode("latin-1").split(" ", 2)
             if method.upper() == "CONNECT":                      # HTTPS / WSS
                 host, _, port = target.rpartition(":")
-                up = socks5_connect(self.upstream, self.user, self.password,
-                                    host.strip("[]"), int(port))
+                up = self._connect(host.strip("[]"), int(port))
                 client.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
                 leftover = head.split(b"\r\n\r\n", 1)[1]
                 if leftover:
                     up.sendall(leftover)
             else:                                                # plain HTTP
                 u = urlsplit(target)
-                up = socks5_connect(self.upstream, self.user, self.password,
-                                    u.hostname, u.port or 80)
+                up = self._connect(u.hostname, u.port or 80)
                 path = (u.path or "/") + (f"?{u.query}" if u.query else "")
                 up.sendall(f"{method} {path} {version}\r\n".encode("latin-1") + rest)
             _pipe(client, up)

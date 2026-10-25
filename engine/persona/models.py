@@ -65,6 +65,9 @@ class Proxy:
     username: Optional[str] = None
     password: Optional[str] = None
     country: Optional[str] = None  # ISO code, used to align locale/timezone
+    # Rotating/mobile proxies: a vendor URL that, when requested, gives the
+    # proxy a new exit IP (see proxypool.change_ip).
+    change_ip_url: Optional[str] = None
 
     def to_playwright(self) -> dict:
         cfg: dict = {"server": self.server}
@@ -79,7 +82,8 @@ class Proxy:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Proxy":
-        return cls(**d)
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
 
 
 @dataclass

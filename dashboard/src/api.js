@@ -69,6 +69,8 @@ export const api = {
   importCookies: (id, text, clear) => req("POST", `/api/profiles/${id}/cookies`, { text, clear }),
   // These open the profile headlessly too, so they're slow by nature.
   proxyTest: (id) => req("POST", `/api/profiles/${id}/proxy-test`),
+  // Rotating/mobile proxies: request a new exit IP via the proxy's change-IP URL.
+  changeIp: (id) => req("POST", `/api/profiles/${id}/proxy/change-ip`),
   // Quick check of a proxy straight from the editor form (no saved profile needed).
   checkProxy: (proxy) => req("POST", "/api/proxy/check", { proxy }),
   trust: (id) => req("POST", `/api/profiles/${id}/trust`),

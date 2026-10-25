@@ -273,7 +273,8 @@ def to_engine_profile(d: dict) -> Profile:
     proxy = None
     px = d.get("proxy")
     if px and str(px.get("host") or "").strip():
-        scheme = {"HTTP": "http", "HTTPS": "http", "SOCKS5": "socks5"}.get(px.get("type", "HTTP"), "http")
+        scheme = {"HTTP": "http", "HTTPS": "http", "SOCKS5": "socks5",
+                  "SOCKS4": "socks4"}.get(px.get("type", "HTTP"), "http")
         # Pasted values often carry stray spaces (" 42737"): "http://h: 42737"
         # works for urllib but is an invalid --proxy-server for the browser.
         host, port = str(px["host"]).strip(), str(px.get("port") or "").strip()
@@ -282,6 +283,7 @@ def to_engine_profile(d: dict) -> Profile:
             username=(px.get("user") or "").strip() or None,
             password=px.get("pass") or None,
             country=px.get("country") or None,
+            change_ip_url=(px.get("changeIpUrl") or "").strip() or None,
         )
 
     return Profile(
@@ -317,7 +319,7 @@ def _proxy_to_dash(proxy) -> Optional[dict]:
     kind = {"http": "HTTP", "https": "HTTPS", "socks5": "SOCKS5", "socks4": "SOCKS4"}.get(scheme.lower(), "HTTP")
     return {"type": kind, "host": host, "port": port,
             "user": proxy.username or "", "pass": proxy.password or "",
-            "country": proxy.country or ""}
+            "country": proxy.country or "", "changeIpUrl": proxy.change_ip_url or ""}
 
 
 def to_dashboard_profile(prof: Profile) -> dict:
@@ -820,6 +822,20 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         _log_activity(pid, "trust", f"grade {rep.get('grade', '?')}")
         return rep
 
+    @app.post("/api/profiles/{pid}/proxy/change-ip")
+    def change_profile_ip(pid: str):
+        """Rotate a profile's proxy to a new exit IP via its change-IP URL."""
+        d = dash.get(pid)
+        if not d:
+            raise HTTPException(404, "profile not found")
+        url = ((d.get("proxy") or {}).get("changeIpUrl") or "").strip()
+        if not url:
+            raise HTTPException(400, "this profile's proxy has no change-IP URL")
+        from .proxypool import change_ip
+        res = change_ip(url)
+        _log_activity(pid, "change-ip", f"HTTP {res['status']}" if res["status"] else "failed")
+        return res
+
     @app.post("/api/profiles/{pid}/tls")
     def tls(pid: str):
         _prepare(pid)
@@ -1125,6 +1141,25 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         pool.update(pid, {"status": status, "lastCheck": res, "checkedAt": time.time()})
         return {**res, "status": status}
 
+    @app.put("/api/proxies/{pid}")
+    def update_proxy(pid: str, body: dict):
+        """Edit a pool proxy's name / country / change-IP URL."""
+        patch = {k: body[k] for k in ("name", "country", "changeIpUrl") if k in body}
+        item = pool.update(pid, patch)
+        if not item:
+            raise HTTPException(404, "proxy not found")
+        return item
+
+    @app.post("/api/proxies/{pid}/change-ip")
+    def change_pool_ip(pid: str):
+        from .proxypool import change_ip
+        proxy = pool.get(pid)
+        if not proxy:
+            raise HTTPException(404, "proxy not found")
+        if not (proxy.get("changeIpUrl") or "").strip():
+            raise HTTPException(400, "this proxy has no change-IP URL")
+        return change_ip(proxy["changeIpUrl"])
+
     @app.post("/api/proxy/check")
     def check_proxy(body: dict):
         """Test a proxy straight from the editor form — no saved profile needed.
@@ -1171,7 +1206,8 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
             pr = proxies[i % len(proxies)]
             prof["proxy"] = {"type": pr.get("type", "HTTP"), "host": pr["host"], "port": str(pr["port"]),
                              "user": pr.get("user") or "", "pass": pr.get("pass") or "",
-                             "country": pr.get("country") or ""}
+                             "country": pr.get("country") or "",
+                             "changeIpUrl": pr.get("changeIpUrl") or ""}
             cc = (pr.get("country") or "").upper()
             loc = devices.COUNTRY_TO_LOCALE.get(cc)
             if loc:

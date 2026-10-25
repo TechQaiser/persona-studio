@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import urllib.error
 import urllib.request
 from typing import Optional
 
@@ -84,6 +85,31 @@ def parse_many(text: str) -> list[dict]:
     return out
 
 
+def change_ip(url: str, timeout: float = 20) -> dict:
+    """Ask a rotating/mobile proxy vendor for a new exit IP by requesting its
+    change-IP URL. The URL is a vendor API endpoint, so it's called directly
+    (like the vendor's own dashboard would), not through the proxy.
+
+    Returns ``{ok, status, body}``. The exit-IP cache is cleared on success, so
+    the next launch looks up the new IP's timezone and location."""
+    url = (url or "").strip()
+    if not re.match(r"^https?://", url, re.I):
+        return {"ok": False, "status": None, "body": "the change-IP URL must start with http:// or https://"}
+    req = urllib.request.Request(url, headers={"User-Agent": "persona-change-ip/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            status, body = r.status, r.read(2000).decode("utf-8", "replace").strip()
+    except urllib.error.HTTPError as e:
+        status, body = e.code, (e.read(500).decode("utf-8", "replace").strip() or str(e))
+    except Exception as e:  # noqa: BLE001 - report it
+        return {"ok": False, "status": None, "body": str(e).splitlines()[0][:300]}
+    ok = 200 <= status < 300
+    if ok:
+        from . import geo
+        geo.clear_cache()
+    return {"ok": ok, "status": status, "body": body[:500]}
+
+
 def _proxy_url(proxy: dict) -> str:
     auth = ""
     if proxy.get("user"):
@@ -95,17 +121,16 @@ def check(proxy: dict, timeout: float = 12) -> dict:
     """Route a real request through the proxy and report the exit IP/country.
 
     Uses urllib directly (no browser), which keeps a pool health-check fast.
-    SOCKS5 goes through the local bridge (``bridge.py``) urllib can talk to;
-    SOCKS4 is still reported as 'needs the profile proxy test' rather than failed.
+    SOCKS4 and SOCKS5 go through the local bridge (``bridge.py``), which urllib
+    can talk to.
     """
     kind = str(proxy.get("type", "HTTP")).upper()
-    if kind == "SOCKS4":
-        return {"ok": None, "error": "SOCKS4 — test it via a profile's proxy test"}
     url = _proxy_url(proxy)
     if kind.startswith("SOCKS"):
         from .bridge import bridge_for
         from .models import Proxy
-        url = bridge_for(Proxy(server=f"socks5://{proxy['host']}:{proxy['port']}",
+        scheme = "socks4" if kind == "SOCKS4" else "socks5"
+        url = bridge_for(Proxy(server=f"{scheme}://{proxy['host']}:{proxy['port']}",
                                username=proxy.get("user"), password=proxy.get("pass"))).url
 
     handler = urllib.request.ProxyHandler({"http": url, "https": url})

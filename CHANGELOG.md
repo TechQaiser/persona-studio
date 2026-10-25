@@ -122,6 +122,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   expects the launch languages and auto-adjust doesn't write them back. Off by
   default, because moving an existing account to a new language is a signal of
   its own.
+- **SOCKS4 proxies** work on every engine and in the pool's health check. They
+  go through the local bridge, spoken as SOCKS4a so hostnames resolve at the
+  proxy (no DNS leak). The dashboard was quietly saving SOCKS4 as HTTP; it's
+  now a proxy type of its own.
+- **Change-IP URL** for rotating and mobile proxies. Save the vendor's
+  rotation URL on a proxy, then press **Change IP** in the editor (or
+  `persona proxy change-ip <profile>`, `POST /api/profiles/{id}/proxy/change-ip`,
+  `POST /api/proxies/{id}/change-ip`). The next launch re-reads the new exit
+  IP's timezone and location. Assigning a pool proxy carries its URL along.
+- **Paste a proxy in any format.** The editor's Proxy tab fills itself in from
+  a pasted `host:port:user:pass`, `user:pass@host:port` or
+  `socks5://user:pass@host:port`, and `persona create/edit --proxy` accept the
+  same formats.
 - **devicePixelRatio as part of the device.** Macs are 2, phones carry their
   panel's exact ratio (Pixel 7 2.625, Galaxy S21 3, …), and Windows 1536x864 is
   1.25 (a 1920x1080 laptop at 125%). Before, every desktop was 1, so every macOS

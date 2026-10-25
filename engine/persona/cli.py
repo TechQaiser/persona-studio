@@ -58,17 +58,18 @@ def _c(text: str, color: str) -> str:
 
 
 def _parse_proxy(raw: Optional[str], country: Optional[str]) -> Optional[Proxy]:
-    """Accept 'scheme://[user:pass@]host:port' and return a Proxy."""
+    """Accept any format a proxy vendor hands out (see proxypool.parse_line):
+    'scheme://user:pass@host:port', 'host:port:user:pass', 'host:port', ..."""
     if not raw:
         return None
-    server, user, pw = raw, None, None
-    if "@" in raw:
-        scheme, rest = raw.split("://", 1) if "://" in raw else ("http", raw)
-        creds, hostport = rest.rsplit("@", 1)
-        if ":" in creds:
-            user, pw = creds.split(":", 1)
-        server = f"{scheme}://{hostport}"
-    return Proxy(server=server, username=user, password=pw, country=country)
+    from .proxypool import parse_line
+    p = parse_line(raw)
+    if not p:
+        raise RuntimeError(f"Couldn't read '{raw}' as a proxy. Use host:port, host:port:user:pass "
+                           "or scheme://user:pass@host:port.")
+    scheme = {"HTTP": "http", "HTTPS": "http", "SOCKS5": "socks5", "SOCKS4": "socks4"}[p["type"]]
+    return Proxy(server=f"{scheme}://{p['host']}:{p['port']}", username=p["user"],
+                 password=p["pass"], country=country or p["country"])
 
 
 # ---- commands ------------------------------------------------------------
@@ -416,6 +417,31 @@ def _print_checks(checks: list[dict]) -> None:
         print(f"  [{mark}] {c['name']}")
         if c.get("detail") and not c["ok"]:
             print(f"         {_c(c['detail'], C.DIM)}")
+
+
+def cmd_proxy_change_ip(args, store: ProfileStore) -> int:
+    prof = _resolve_or_fail(args, store)
+    if not prof:
+        return 1
+    if args.url:
+        if not prof.proxy:
+            print(_c(f"'{prof.name}' has no proxy.", C.RED))
+            return 1
+        prof.proxy.change_ip_url = args.url
+        store.save(prof)
+        print(_c(f"Saved the change-IP URL for '{prof.name}'.", C.GRN))
+        return 0
+    url = prof.proxy.change_ip_url if prof.proxy else None
+    if not url:
+        print(_c(f"'{prof.name}' has no change-IP URL. Set one with --url.", C.RED))
+        return 1
+    from .proxypool import change_ip
+    res = change_ip(url)
+    if res["ok"]:
+        print(_c(f"New exit IP requested (HTTP {res['status']}). {res['body'][:200]}", C.GRN))
+        return 0
+    print(_c(f"Change-IP failed: {res['status'] or ''} {res['body'][:200]}", C.RED))
+    return 1
 
 
 def cmd_proxy_test(args, store: ProfileStore) -> int:
@@ -1030,6 +1056,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--engine", help="Test with a different engine than the profile's")
     s.add_argument("--json", action="store_true", help="Print the raw result as JSON")
     s.set_defaults(func=cmd_proxy_test)
+    s = px.add_parser("change-ip", help="Get a new exit IP from a rotating proxy's change-IP URL")
+    s.add_argument("ref")
+    s.add_argument("--url", help="Save this change-IP URL on the profile's proxy instead")
+    s.set_defaults(func=cmd_proxy_change_ip)
 
     c = sub.add_parser("tls", help="Show the profile's TLS/JA3 handshake fingerprint")
     c.add_argument("ref")

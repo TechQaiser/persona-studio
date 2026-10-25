@@ -250,6 +250,29 @@ function flagProblems(text) {
   });
 }
 
+// Read a pasted proxy in any vendor format (mirrors proxypool.parse_line):
+// scheme://user:pass@host:port, user:pass@host:port, host:port:user:pass[:CC], host:port[:CC].
+function parseProxyLine(line) {
+  let s = (line || "").trim();
+  if (!s) return null;
+  let scheme = "http";
+  if (s.includes("://")) { [scheme, s] = s.split(/:\/\/(.*)/s); scheme = scheme.toLowerCase(); }
+  let user = null, pass = null, country = null;
+  if (s.includes("@")) {
+    const at = s.lastIndexOf("@"); const creds = s.slice(0, at); s = s.slice(at + 1);
+    const c = creds.indexOf(":");
+    if (c >= 0) { user = creds.slice(0, c); pass = creds.slice(c + 1); } else user = creds || null;
+  }
+  const parts = s.split(":");
+  if (parts.length < 2 || !/^\d+$/.test(parts[1].trim()) || !parts[0].trim()) return null;
+  if (user === null && parts.length >= 4) {
+    user = parts[2] || null; pass = parts[3] || null;
+    if (parts.length >= 5 && /^[A-Za-z]{2}$/.test(parts[4])) country = parts[4].toUpperCase();
+  } else if (parts.length >= 3 && /^[A-Za-z]{2}$/.test(parts[parts.length - 1])) country = parts[parts.length - 1].toUpperCase();
+  const type = { http: "HTTP", https: "HTTPS", socks5: "SOCKS5", socks5h: "SOCKS5", socks4: "SOCKS4", socks: "SOCKS5" }[scheme] || "HTTP";
+  return { type, host: parts[0].trim(), port: parts[1].trim(), user: user || "", pass: pass || "", ...(country ? { country } : {}) };
+}
+
 // Per-profile storage: what's kept between sessions (mirrors history.STORAGE_KINDS).
 const STORAGE_KINDS = [
   ["local", "Local storage"], ["indexeddb", "IndexedDB"], ["history", "Browsing history"],
@@ -1328,7 +1351,7 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
               {p.proxy ? (
                 <>
                   <Row>
-                    <Field label="Type"><select className="ps-in" value={p.proxy.type} onChange={e => setProxy({ type: e.target.value })}>{["HTTP", "HTTPS", "SOCKS5"].map(t => <option key={t}>{t}</option>)}</select></Field>
+                    <Field label="Type"><select className="ps-in" value={p.proxy.type} onChange={e => setProxy({ type: e.target.value })}>{["HTTP", "HTTPS", "SOCKS5", "SOCKS4"].map(t => <option key={t}>{t}</option>)}</select></Field>
                     <Field label="Country"><select className="ps-in" value={p.proxy.country} onChange={e => setProxy({ country: e.target.value })}>{Object.keys(COUNTRY_LOCALE).map(c => <option key={c}>{c}</option>)}</select></Field>
                   </Row>
                   <Row>
@@ -1346,6 +1369,35 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
                     <Field label="Username"><input className="ps-in mono" value={p.proxy.user} onChange={e => setProxy({ user: e.target.value })} /></Field>
                     <Field label="Password"><input className="ps-in mono" type="password" value={p.proxy.pass} onChange={e => setProxy({ pass: e.target.value })} /></Field>
                   </Row>
+                  <Field label="Paste a proxy (any format)">
+                    <input className="ps-in mono" placeholder="host:port:user:pass  or  socks5://user:pass@host:port"
+                      onPaste={e => {
+                        const parsed = parseProxyLine(e.clipboardData.getData("text"));
+                        if (parsed) { e.preventDefault(); setProxy(parsed); toast.success(`Proxy filled in: ${parsed.type} ${parsed.host}:${parsed.port}`); }
+                      }}
+                      onKeyDown={e => {
+                        if (e.key !== "Enter") return;
+                        const parsed = parseProxyLine(e.currentTarget.value);
+                        if (parsed) { setProxy(parsed); e.currentTarget.value = ""; toast.success(`Proxy filled in: ${parsed.type} ${parsed.host}:${parsed.port}`); }
+                        else toast.error("That doesn't look like a proxy.");
+                      }} />
+                  </Field>
+                  <Field label="Change-IP URL (rotating / mobile proxies, optional)">
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <input className="ps-in mono" style={{ flex: 1 }} value={p.proxy.changeIpUrl || ""}
+                        onChange={e => setProxy({ changeIpUrl: e.target.value })} placeholder="https://vendor.example/api/rotate?key=…" />
+                      <button className="ps-btn ghost sm" disabled={!cookiesReady || !(p.proxy.changeIpUrl || "").trim() || probe?.state === "running"}
+                        title={cookiesReady ? "Request a new exit IP now" : "Save the profile on a live engine first"}
+                        onClick={async () => {
+                          try {
+                            const r = await api.changeIp(p.id);
+                            r.ok ? toast.success(`New exit IP requested (HTTP ${r.status}).`) : toast.error(`Change-IP failed: ${r.status || ""} ${r.body || ""}`);
+                          } catch (err) { toast.error("Change-IP failed: " + err.message); }
+                        }}>
+                        <RefreshCw size={13} /> Change IP
+                      </button>
+                    </div>
+                  </Field>
                   <div className="ps-cookie-actions" style={{ marginTop: 4 }}>
                     <button className="ps-btn ghost sm"
                       disabled={probe?.state === "running"}
