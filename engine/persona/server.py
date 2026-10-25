@@ -37,6 +37,7 @@ from typing import Optional
 
 from . import cookies as cookies_mod
 from . import devices
+from . import locks
 from .fingerprint import generate, validate
 from .models import Fingerprint, Profile, Proxy
 from .store import ProfileStore
@@ -472,10 +473,17 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         allow_headers=["Content-Type", TOKEN_HEADER],
     )
 
+    def held_elsewhere(pid: str) -> Optional[dict]:
+        """The session lock of a profile opened outside this server (a terminal
+        ``persona launch``, another dashboard, the scheduler), if it's live."""
+        if pid in running:
+            return None
+        return locks.holder(engine_store.userdata_dir / pid)
+
     def is_running(pid: str) -> bool:
         proc = running.get(pid)
         if proc is None:
-            return False
+            return held_elsewhere(pid) is not None
         if proc.poll() is not None:      # exited (browser was closed)
             running.pop(pid, None)
             # Session just ended — record when it was last active.
@@ -499,6 +507,8 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         d["status"] = "running" if running_now else "stopped"
         d["lastActive"] = "now" if running_now else _rel_time(d.get("_last_active"))
         d["launchError"] = None if running_now else d.get("_launchError")
+        other = held_elsewhere(d["id"]) if running_now else None
+        d["openElsewhere"] = other.get("pid") if other else None
         return d
 
     def _launch_log(pid: str) -> Path:
@@ -687,6 +697,10 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         d = dash.get(pid)
         if not d:
             raise HTTPException(404, "profile not found")
+        other = held_elsewhere(pid)
+        if other:
+            raise HTTPException(409, f"This profile was opened outside the dashboard "
+                                     f"(process {other.get('pid')}). Close its window there.")
         _stop(pid)
         return decorate(d)
 

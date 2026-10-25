@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import fingerprint as fp_mod
+from . import locks
 from .bridge import browser_proxy
 from .geo import launch_geo
 from .models import Profile
@@ -370,7 +371,30 @@ def get(name: str) -> Callable:
             f"The '{name}' engine needs the '{req}' package, which isn't installed.\n"
             f"Install it, then try again  (see persona/drivers.py for hints)."
         )
-    return _DRIVERS[name]["fn"]
+    return _locked(_DRIVERS[name]["fn"])
+
+
+def _locked(fn: Callable) -> Callable:
+    """Wrap a driver so the profile's session lock (see ``locks.py``) is held
+    for as long as its browser is open. Every launch path goes through here,
+    so a profile can never be open twice, whoever started it."""
+    def run(profile, store, *args, keep_open=True, **kwargs):
+        lock = locks.acquire(store.user_data_path(profile.id))
+        try:
+            handles = fn(profile, store, *args, keep_open=keep_open, **kwargs)
+        except BaseException:
+            lock.release()
+            raise
+        if not keep_open or not handles:
+            lock.release()            # the driver already waited for the close
+            return handles
+        try:
+            handles[1].on("close", lambda *_: lock.release())
+        except Exception:
+            pass                      # released at process exit instead
+        return handles
+    run.__wrapped__ = fn
+    return run
 
 
 @contextmanager
@@ -390,9 +414,13 @@ def session(profile: Profile, store, engine: Optional[str] = None,
     if name == "camoufox":
         # Camoufox's driver is launch-and-wait only, so open it directly.
         from camoufox.sync_api import Camoufox
-        with Camoufox(headless=headless, persistent_context=True,
-                      user_data_dir=str(store.user_data_path(profile.id))) as browser:
-            yield browser
+        lock = locks.acquire(store.user_data_path(profile.id))
+        try:
+            with Camoufox(headless=headless, persistent_context=True,
+                          user_data_dir=str(store.user_data_path(profile.id))) as browser:
+                yield browser
+        finally:
+            lock.release()
         return
 
     handles = get(name)(quiet, store, headless=headless, keep_open=True)

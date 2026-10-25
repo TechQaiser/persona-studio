@@ -119,6 +119,25 @@ def cmd_show(args, store: ProfileStore) -> int:
     return 0
 
 
+def cmd_unlock(args, store: ProfileStore) -> int:
+    from . import locks
+    prof = store.resolve(args.ref)
+    if not prof:
+        print(_c(f"No profile matching '{args.ref}'.", C.RED))
+        return 1
+    user_data = store.user_data_path(prof.id)
+    live = locks.holder(user_data)
+    if live and not args.force:
+        print(_c(f"'{prof.name}' is open in process {live.get('pid')}, which is still "
+                 "running. Close that browser, or pass --force if you're sure.", C.YEL))
+        return 1
+    if locks.clear(user_data):
+        print(_c(f"Cleared the session lock on '{prof.name}'.", C.GRN))
+    else:
+        print(f"'{prof.name}' wasn't locked.")
+    return 0
+
+
 def cmd_launch(args, store: ProfileStore) -> int:
     prof = store.resolve(args.ref)
     if not prof:
@@ -830,6 +849,12 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--headless", action="store_true")
     c.add_argument("--engine", help="Override the profile's launch engine for this run")
     c.set_defaults(func=cmd_launch)
+
+    c = sub.add_parser("unlock", help="Clear a profile's session lock (if a crash left one)")
+    c.add_argument("ref")
+    c.add_argument("--force", action="store_true",
+                   help="Clear it even though the holding process is still alive")
+    c.set_defaults(func=cmd_unlock)
 
     c = sub.add_parser("engines", help="List available launch engines")
     c.set_defaults(func=cmd_engines)

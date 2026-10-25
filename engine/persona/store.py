@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import crypto
+from .locks import LOCK_FILE
 from .models import Profile
 
 
@@ -224,7 +225,8 @@ class ProfileStore:
             ud = self.userdata_dir / profile_id
             if ud.exists():
                 for f in ud.rglob("*"):
-                    if f.is_file():
+                    # The session lock belongs to whoever has it open *now*.
+                    if f.is_file() and f.name != LOCK_FILE:
                         z.write(f, arcname=str(Path("user-data") / f.relative_to(ud)))
         return dest
 

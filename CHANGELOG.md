@@ -49,6 +49,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   actually calling `/api/profiles/health`. The probe is now `api.ping()`.
 
 ### Added
+- **Active session lock** (`persona/locks.py`). A profile can only be open in one
+  live process. Opening it twice is the "same account, two devices at once"
+  signal, and two browsers writing one user-data dir corrupt it. The lock is a
+  file in the profile's user-data dir naming its process, taken atomically by
+  every launch path (dashboard, `persona launch`, attach, warm-up, cookie and
+  trust tools). A lock left by a crashed process is detected and taken over.
+  The dashboard now shows a profile opened from a terminal as running, and
+  refuses to open its session. `persona unlock <profile>` clears a lock by hand.
 - **devicePixelRatio as part of the device.** Macs are 2, phones carry their
   panel's exact ratio (Pixel 7 2.625, Galaxy S21 3, …), and Windows 1536x864 is
   1.25 (a 1920x1080 laptop at 125%). Before, every desktop was 1, so every macOS
