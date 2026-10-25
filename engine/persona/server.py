@@ -296,6 +296,7 @@ def to_engine_profile(d: dict) -> Profile:
         extensions=_parse_lines(d.get("extensions")),
         launch_args=_parse_lines(d.get("launchArgs")),
         storage=_storage_off(d.get("storage")),
+        auto_lang=bool(d.get("autoLang", False)),
     )
 
 
@@ -350,6 +351,7 @@ def to_dashboard_profile(prof: Profile) -> dict:
         "extensions": "\n".join(prof.extensions or []),
         "launchArgs": "\n".join(prof.launch_args or []),
         "storage": normalize_storage(prof.storage),
+        "autoLang": prof.auto_lang,
         "lastActive": "never",
     }
 

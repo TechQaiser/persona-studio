@@ -151,6 +151,24 @@ COUNTRY_GEO = {
     "TR": (41.0082, 28.9784),
 }
 
+# Country -> the language its browsers are usually set to, for profiles whose
+# languages follow the proxy's exit IP (Profile.auto_lang). Where English is
+# the usual browser language despite another official one (India, Pakistan,
+# Nigeria, the Philippines...), it's English.
+COUNTRY_LANGUAGE = {
+    "US": "en", "GB": "en", "UK": "en", "CA": "en", "AU": "en", "NZ": "en", "IE": "en",
+    "IN": "en", "PK": "en", "NG": "en", "PH": "en", "SG": "en", "ZA": "en", "KE": "en",
+    "BD": "bn", "DE": "de", "AT": "de", "CH": "de", "FR": "fr", "BE": "nl", "NL": "nl",
+    "LU": "fr", "ES": "es", "MX": "es", "AR": "es", "CO": "es", "CL": "es", "PE": "es",
+    "VE": "es", "EC": "es", "PT": "pt", "BR": "pt", "IT": "it", "PL": "pl", "CZ": "cs",
+    "SK": "sk", "HU": "hu", "RO": "ro", "BG": "bg", "GR": "el", "HR": "hr", "RS": "sr",
+    "SI": "sl", "UA": "uk", "RU": "ru", "BY": "ru", "KZ": "ru", "TR": "tr", "IL": "he",
+    "SA": "ar", "AE": "ar", "EG": "ar", "MA": "ar", "DZ": "ar", "IQ": "ar", "IR": "fa",
+    "SE": "sv", "NO": "nb", "DK": "da", "FI": "fi", "EE": "et", "LV": "lv", "LT": "lt",
+    "JP": "ja", "KR": "ko", "CN": "zh", "TW": "zh", "HK": "zh", "VN": "vi", "TH": "th",
+    "ID": "id", "MY": "ms",
+}
+
 # locale -> the country whose coordinates fit it, for when there's no proxy.
 LOCALE_TO_COUNTRY = {
     "en-US": "US", "en-GB": "GB", "en-PK": "PK", "en-IN": "IN",

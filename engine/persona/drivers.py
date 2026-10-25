@@ -46,7 +46,7 @@ from typing import Callable, Optional
 from . import fingerprint as fp_mod
 from . import locks
 from .bridge import browser_proxy
-from .geo import launch_geo
+from .geo import launch_geo, launch_languages
 from .models import Profile
 from .stealth import build_init_script
 
@@ -487,6 +487,8 @@ def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: 
     ]
     geo = launch_geo(profile)
     geolocation = geo["geolocation"]
+    locale, languages = launch_languages(profile, geo)
+    fp = replace(fp, locale=locale, languages=languages)
     context_opts: dict = {
         "user_agent": fp.user_agent,
         "locale": fp.locale,
@@ -634,7 +636,7 @@ def _driver_cloak(profile, store, headless=False, keep_open=True, extra_args=Non
         headless=headless,
         proxy=browser_proxy(profile.proxy).to_playwright() if profile.proxy else None,
         **window,
-        locale=fp.locale,
+        locale=launch_languages(profile, geo)[0],
         timezone=geo["timezone"],     # the exit IP's zone, not the stored one
         geoip=bool(profile.proxy) and not geo["ip"],
         **geo_opts,

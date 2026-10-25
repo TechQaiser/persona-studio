@@ -263,6 +263,8 @@ def cmd_edit(args, store: ProfileStore) -> int:
                 prof.tags.append(t)
     if args.proxy is not None:
         prof.proxy = _parse_proxy(args.proxy, args.country) if args.proxy else None
+    if args.auto_lang is not None:
+        prof.auto_lang = args.auto_lang == "on"
     store.save(prof)
     print(_c(f"Updated '{prof.name}'.", C.GRN))
     return 0
@@ -952,6 +954,8 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--add-tag", action="append")
     c.add_argument("--proxy")
     c.add_argument("--country")
+    c.add_argument("--auto-lang", choices=["on", "off"],
+                   help="Languages follow the proxy's exit-IP country at launch")
     c.set_defaults(func=cmd_edit)
 
     c = sub.add_parser("regen", help="Regenerate the fingerprint")

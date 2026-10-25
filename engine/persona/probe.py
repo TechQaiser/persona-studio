@@ -29,7 +29,7 @@ from typing import Optional
 from . import webgl as _webgl
 from .drivers import session
 from .fingerprint import navigator_device_memory, pixel_ratio
-from .geo import launch_geo
+from .geo import launch_geo, launch_languages
 from .models import Profile
 from .store import ProfileStore
 
@@ -595,12 +595,14 @@ def _observe(profile: Profile, store: ProfileStore, engine: Optional[str] = None
     return seen
 
 
-def _grade(fp, seen: dict, engine_name: str, expected_tz: Optional[str] = None) -> dict:
+def _grade(fp, seen: dict, engine_name: str, expected_tz: Optional[str] = None,
+           expected_langs: Optional[list] = None) -> dict:
     """Score an observation against a fingerprint. Pure — no browser — so the
     aligner can grade a would-be fingerprint against the same observation.
     ``expected_tz`` is the zone the launch presented (the proxy exit IP's when
     it resolved); it defaults to the profile's stored timezone."""
     expected_tz = expected_tz or fp.timezone
+    expected_langs = list(expected_langs or fp.languages)
     checks = [
         _check("navigator.webdriver is false", seen["webdriver"] is False,
                f"reads {seen['webdriver']!r}"),
@@ -614,8 +616,9 @@ def _grade(fp, seen: dict, engine_name: str, expected_tz: Optional[str] = None) 
                seen["userAgent"]),
         _check("navigator.platform matches the OS", seen["platform"] == fp.platform,
                f"expected {fp.platform}, got {seen['platform']}"),
-        _check("Languages match the locale", seen["languages"] == list(fp.languages),
-               f"expected {fp.languages}, got {seen['languages']}"),
+        _check("Languages match the IP location" if expected_langs != list(fp.languages)
+               else "Languages match the locale", seen["languages"] == expected_langs,
+               f"expected {expected_langs}, got {seen['languages']}"),
         _check("CPU cores match", seen["cores"] == fp.hardware_concurrency,
                f"expected {fp.hardware_concurrency}, got {seen['cores']}"),
         _check("Device memory matches", seen["memory"] == navigator_device_memory(fp.device_memory),
@@ -698,7 +701,8 @@ def trust_report(profile: Profile, store: ProfileStore,
     """
     seen = _observe(profile, store, engine)
     engine_name = engine or profile.engine or "playwright"
-    rep = _grade(profile.fingerprint, seen, engine_name, _launch_tz(profile, engine_name))
+    rep = _grade(profile.fingerprint, seen, engine_name, _launch_tz(profile, engine_name),
+                 _launch_langs(profile, engine_name))
     table = seen.get("webgl") if engine_name != "camoufox" else None
     if table and not profile.fingerprint.webgl:
         # First reading becomes the baseline later checks compare against.
@@ -706,6 +710,14 @@ def trust_report(profile: Profile, store: ProfileStore,
         store.save(profile)
     rep["webgl"] = profile.fingerprint.webgl or table
     return rep
+
+
+def _launch_langs(profile: Profile, engine_name: str) -> Optional[list]:
+    """The languages the launch presented when they follow the exit IP
+    (``auto_lang``); None means "the profile's own". Camoufox resolves its own."""
+    if engine_name == "camoufox" or not getattr(profile, "auto_lang", False):
+        return None
+    return launch_languages(profile)[1]
 
 
 def _launch_tz(profile: Profile, engine_name: str) -> Optional[str]:
@@ -775,7 +787,8 @@ def align_to_reality(profile: Profile, store: ProfileStore,
     seen = _observe(profile, store, engine, font_candidates=all_fonts)
     fp = profile.fingerprint
     engine_name = engine or profile.engine or "playwright"
-    before = _grade(fp, seen, engine_name, _launch_tz(profile, engine_name))
+    before = _grade(fp, seen, engine_name, _launch_tz(profile, engine_name),
+                    _launch_langs(profile, engine_name))
 
     changed: list[str] = []
 
@@ -820,7 +833,9 @@ def align_to_reality(profile: Profile, store: ProfileStore,
     # 3. Media + languages, as reported.
     apply("cameras", seen.get("cameras"), "cameras")
     apply("microphones", seen.get("microphones"), "microphones")
-    if seen.get("languages") and list(fp.languages) != list(seen["languages"]):
+    if (seen.get("languages") and list(fp.languages) != list(seen["languages"])
+            and seen["languages"] != _launch_langs(profile, engine_name)):
+        # (Languages that follow the exit IP on purpose aren't written back.)
         fp.languages = list(seen["languages"])
         changed.append("languages")
 
@@ -865,7 +880,8 @@ def align_to_reality(profile: Profile, store: ProfileStore,
     store.save(profile)
     # The user-agent is fed to the engine at launch, so it will report the new
     # value next time — grade against that, not the stale observed UA.
-    after = _grade(fp, {**seen, "userAgent": fp.user_agent}, engine_name, _launch_tz(profile, engine_name))
+    after = _grade(fp, {**seen, "userAgent": fp.user_agent}, engine_name,
+                   _launch_tz(profile, engine_name), _launch_langs(profile, engine_name))
 
     keep = ("score", "grade", "passed", "total")
     return {

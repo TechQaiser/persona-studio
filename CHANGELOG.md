@@ -113,6 +113,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   stays allowed). Each ignored flag now says why, both in launch warnings and
   live under the field in the editor. A flag must look like a flag
   (`--name` or `--name=value`).
+- **Languages from the exit IP** (opt-in per profile: editor **Proxy** tab →
+  *Languages follow the exit IP*, or `persona edit <profile> --auto-lang on`).
+  Each launch sets `navigator.languages`, the locale and the Accept-Language
+  header from the proxy's exit country, in the shape real non-English users
+  have: `de-DE, de, en-US, en`. 70 countries are mapped (English where it's the
+  usual browser language, e.g. India, Pakistan, Nigeria). The trust check
+  expects the launch languages and auto-adjust doesn't write them back. Off by
+  default, because moving an existing account to a new language is a signal of
+  its own.
 - **devicePixelRatio as part of the device.** Macs are 2, phones carry their
   panel's exact ratio (Pixel 7 2.625, Galaxy S21 3, …), and Windows 1536x864 is
   1.25 (a 1920x1080 laptop at 125%). Before, every desktop was 1, so every macOS

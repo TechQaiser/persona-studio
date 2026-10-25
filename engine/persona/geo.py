@@ -121,5 +121,36 @@ def launch_geo(profile: Profile, lookup=lookup_exit) -> dict:
             "ip": None, "country": country, "city": None, "source": "profile"}
 
 
+def accept_languages(country: Optional[str]) -> Optional[list[str]]:
+    """The language list a browser in ``country`` usually has: the country's
+    language with and without region, then English (``de-DE, de, en-US, en``),
+    which is what real non-English users typically end up with. None if the
+    country is unknown."""
+    cc = (country or "").upper()
+    if cc == "UK":
+        cc = "GB"
+    lang = devices.COUNTRY_LANGUAGE.get(cc)
+    if not lang:
+        return None
+    out: list[str] = []
+    for tag in (f"{lang}-{cc}", lang, "en-US", "en"):
+        if tag not in out:
+            out.append(tag)
+    return out
+
+
+def launch_languages(profile: Profile, geo: Optional[dict] = None) -> tuple[str, list[str]]:
+    """``(locale, languages)`` a launch should present. They follow the exit IP's
+    country only when the profile opts in (``auto_lang``): moving an existing
+    account to a new language is a signal of its own."""
+    fp = profile.fingerprint
+    if getattr(profile, "auto_lang", False):
+        geo = geo if geo is not None else launch_geo(profile)
+        langs = accept_languages(geo.get("country"))
+        if langs:
+            return langs[0], langs
+    return fp.locale, list(fp.languages)
+
+
 def clear_cache() -> None:
     _cache.clear()

@@ -98,6 +98,8 @@ class Profile:
     # What to keep between sessions ({kind: bool}, see history.STORAGE_KINDS).
     # Empty means keep everything.
     storage: dict = field(default_factory=dict)
+    # Languages follow the proxy's exit-IP country at launch (geo.launch_languages).
+    auto_lang: bool = False
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
@@ -113,6 +115,7 @@ class Profile:
             "extensions": self.extensions,
             "launch_args": self.launch_args,
             "storage": self.storage,
+            "auto_lang": self.auto_lang,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "fingerprint": self.fingerprint.to_dict(),
@@ -131,6 +134,7 @@ class Profile:
             extensions=d.get("extensions", []),
             launch_args=d.get("launch_args", []),
             storage=d.get("storage") or {},
+            auto_lang=bool(d.get("auto_lang", False)),
             created_at=d.get("created_at", time.time()),
             updated_at=d.get("updated_at", time.time()),
             fingerprint=Fingerprint.from_dict(d["fingerprint"]),

@@ -1335,6 +1335,13 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
                     <Field label="Host"><input className="ps-in mono" value={p.proxy.host} onChange={e => setProxy({ host: e.target.value })} placeholder="host.proxy.io" /></Field>
                     <Field label="Port"><input className="ps-in mono" value={p.proxy.port} onChange={e => setProxy({ port: e.target.value })} placeholder="8080" /></Field>
                   </Row>
+                  <div className="ps-proxy-toggle">
+                    <span style={{ fontSize: 13 }}>Languages follow the exit IP</span>
+                    <button className={"ps-toggle" + (p.autoLang ? " on" : "")} onClick={() => set({ autoLang: !p.autoLang })}>
+                      <span className="knob" /> <em>{p.autoLang ? "On" : "Off"}</em>
+                    </button>
+                  </div>
+                  <div className="ps-hint"><Globe size={12} /> On: each launch sets the browser languages from the proxy's exit country, e.g. a German IP gives <code>de-DE, de, en-US, en</code>. Best for fresh profiles on rotating proxies. Leave it off for an account that already has a language: switching it is a signal of its own.</div>
                   <Row>
                     <Field label="Username"><input className="ps-in mono" value={p.proxy.user} onChange={e => setProxy({ user: e.target.value })} /></Field>
                     <Field label="Password"><input className="ps-in mono" type="password" value={p.proxy.pass} onChange={e => setProxy({ pass: e.target.value })} /></Field>
