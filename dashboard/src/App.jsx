@@ -2286,6 +2286,14 @@ function FoldersView({ folders, profiles, onOpen, onCreate, onRename, onDelete }
 
 /* ---- Settings ---------------------------------------------------- */
 function SettingsView({ live, config, engines, defaultEngine, onChangeEngine, palette, toggleTheme, counts }) {
+  const [keep, setKeep] = useState(null);
+  useEffect(() => { if (config?.history_keep !== undefined) setKeep(config.history_keep); }, [config]);
+  const changeKeep = async (n) => {
+    const prev = keep;
+    setKeep(n);
+    try { await api.setConfig({ history_keep: n }); toast.success(n ? `Keeping the last ${n} snapshots per profile.` : "Session history turned off."); }
+    catch (e) { setKeep(prev); toast.error("Couldn't save: " + e.message); }
+  };
   return (
     <div className="ps-scroll">
       <div className="ps-view-head">
@@ -2330,6 +2338,19 @@ function SettingsView({ live, config, engines, defaultEngine, onChangeEngine, pa
               <div className="ps-set-label">Data location</div>
               <pre className="ps-code" style={{ marginTop: 6 }}>{config.root}</pre>
               <div className="ps-set-note" style={{ marginTop: 8 }}>Profiles, sessions, proxies and settings all live here on your machine. Back up this folder to move everything to another computer.</div>
+              {keep !== null && (
+                <div className="ps-set-row" style={{ marginTop: 12 }}>
+                  <div>
+                    <div className="ps-set-label">Session history</div>
+                    <div className="ps-set-note">Snapshots kept per profile, saved each time a session ends. Restore them from the editor's Session tab.</div>
+                  </div>
+                  <div className="ps-seg">
+                    {[0, 3, 5, 10].map(n => (
+                      <button key={n} className={keep === n ? "on" : ""} onClick={() => changeKeep(n)}>{n === 0 ? "Off" : n}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </>
           ) : (
             <div className="ps-set-note">Connect the engine (<code>persona serve</code>) to see where your data is stored. In demo mode nothing is written to disk.</div>
