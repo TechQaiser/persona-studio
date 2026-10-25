@@ -267,6 +267,7 @@ def to_engine_profile(d: dict) -> Profile:
         # Only an explicit "dpr" pins it; otherwise it follows the OS/screen
         # (so editing the screen in the dashboard keeps the ratio coherent).
         device_scale_factor=float(d.get("dpr") or 0),
+        webgl=d.get("webglTable") or {},
     )
 
     proxy = None
@@ -338,6 +339,7 @@ def to_dashboard_profile(prof: Profile) -> dict:
         "memory": fp.device_memory,
         "webglVendor": fp.webgl_vendor,
         "webglRenderer": fp.webgl_renderer,
+        "webglTable": fp.webgl or {},
         "canvas": "Noise", "webrtc": "Altered", "audio": "Noise", "fonts": "Masked",
         "locale": fp.locale, "timezone": fp.timezone, "geo": "Prompt",
         "mediaVideo": fp.cameras, "mediaAudio": fp.microphones, "dnt": False,
@@ -810,6 +812,8 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         # re-launching every profile (a trust run opens a real browser).
         d["_trust"] = {"grade": rep.get("grade"), "score": rep.get("score"),
                        "at": time.time()}
+        if rep.get("webgl") and not d.get("webglTable"):
+            d["webglTable"] = rep["webgl"]      # the baseline later checks compare to
         dash.save(d)
         _log_activity(pid, "trust", f"grade {rep.get('grade', '?')}")
         return rep
@@ -900,7 +904,8 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
                         ("cores", "cores"), ("memory", "memory"), ("screen", "screen"),
                         ("webglVendor", "webglVendor"), ("webglRenderer", "webglRenderer"),
                         ("cameras", "mediaVideo"), ("microphones", "mediaAudio"),
-                        ("locale", "locale"), ("timezone", "timezone")):
+                        ("locale", "locale"), ("timezone", "timezone"),
+                        ("webgl", "webglTable")):
             if fp.get(src) is not None:
                 d[dst] = fp[src]
         after = res.get("after") or {}

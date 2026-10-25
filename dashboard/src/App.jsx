@@ -153,10 +153,26 @@ function screenPlausible(os, screen) {
   const [w, h] = screen.split("x").map(Number);
   return w >= 320 && w <= 8000 && h >= 480 && h <= 5000;   // any real display
 }
+// Mirrors persona/webgl.py: Chrome's Direct3D 11 backend has a unique limits
+// signature, so a recorded table tells whether the GPU really is D3D11.
+function webglTableMismatch(renderer, table) {
+  const q = table?.params;
+  if (!q || !q.MAX_VIEWPORT_DIMS || q.MAX_VERTEX_UNIFORM_VECTORS == null || q.MAX_FRAGMENT_UNIFORM_VECTORS == null) return false;
+  const r = (renderer || "").toLowerCase();
+  const claimsD3d11 = r.includes("direct3d11") || r.includes("d3d11");
+  const known = claimsD3d11 || r.includes("metal") || r.includes("opengl") || r.includes("vulkan");
+  if (!known || r.includes("d3d9")) return false;
+  const isD3d11 = q.MAX_VIEWPORT_DIMS[0] === 32767 && q.MAX_VIEWPORT_DIMS[1] === 32767 &&
+    [4095, 4096].includes(q.MAX_VERTEX_UNIFORM_VECTORS) && q.MAX_FRAGMENT_UNIFORM_VECTORS === 1024;
+  return isD3d11 !== claimsD3d11;
+}
+
 function coherence(p) {
   const issues = [];
   if (p.webglRenderer && !webglPlausible(p.os, p.webglRenderer))
     issues.push("GPU doesn't belong to " + p.os);
+  if (p.webglTable && webglTableMismatch(p.webglRenderer, p.webglTable))
+    issues.push("GPU's measured WebGL limits don't fit its graphics API");
   if (p.screen && !screenPlausible(p.os, p.screen))
     issues.push("Screen resolution unusual for " + p.os);
   if (p.locale && p.timezone && LOCALES[p.locale] !== p.timezone)

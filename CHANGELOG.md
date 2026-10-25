@@ -88,6 +88,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   the browser closes (and before the next launch, in case it crashed), so it
   never builds up or lands in snapshots and backups. Works for Chromium engines
   and Camoufox. Cookies are always kept.
+- **WebGL capability table** (`persona/webgl.py`). Fingerprinters read the
+  whole WebGL table (limits, extensions, shader precision), not just the GPU
+  name. The trust check now reads it and verifies two things. First, that the
+  limits fit the GPU's graphics API: Chrome's Direct3D 11 backend has a unique
+  signature (32767 viewport, 4095 vertex and 1024 fragment uniform vectors,
+  measured on Chrome 151), so a profile claiming an Apple GPU on a Windows PC,
+  or a Windows GPU on SwiftShader, is caught. Second, that it's the same device
+  as before: the first reading is stored with the profile, and a later change
+  is flagged. Auto-adjust re-baselines it, `validate()` and the dashboard's
+  coherence meter flag a recorded table that no longer fits the chosen GPU.
+  The table is read, never faked: a JS patch can't make the GPU honour limits
+  it doesn't have.
+- **Headless sessions use the real GPU** (`--enable-gpu` on Playwright and
+  Patchright). Headless Chrome otherwise renders WebGL in software
+  (SwiftShader), a known headless tell that also contradicts the claimed GPU.
+  This affects trust checks, warm-ups and headless automation.
 - **devicePixelRatio as part of the device.** Macs are 2, phones carry their
   panel's exact ratio (Pixel 7 2.625, Galaxy S21 3, …), and Windows 1536x864 is
   1.25 (a 1920x1080 laptop at 125%). Before, every desktop was 1, so every macOS

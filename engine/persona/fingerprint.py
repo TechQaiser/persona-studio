@@ -269,6 +269,11 @@ def validate(fp: Fingerprint) -> list[str]:
 
     if not webgl_plausible(fp.os, fp.webgl_vendor, fp.webgl_renderer):
         issues.append("webgl vendor/renderer not valid for this os")
+    if fp.webgl:
+        from .webgl import backend_mismatch
+        why = backend_mismatch(fp.webgl_renderer, fp.webgl)
+        if why:
+            issues.append(f"webgl limits don't fit the renderer: {why}")
 
     # Accept the curated resolutions, but also any real-world one: after aligning
     # to a machine, a profile carries that display's actual size, which won't be

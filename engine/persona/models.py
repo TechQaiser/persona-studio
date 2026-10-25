@@ -43,6 +43,10 @@ class Fingerprint:
     # window.devicePixelRatio. 0 = derive from the archetype (os/screen/phone),
     # which is what profiles saved before this field existed get.
     device_scale_factor: float = 0.0
+    # The real WebGL capability table (limits, extensions, shader precision)
+    # first seen for this profile, with a signature. Empty until a trust check
+    # reads it; see webgl.py.
+    webgl: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)

@@ -444,6 +444,11 @@ def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: 
         "--disable-blink-features=AutomationControlled",
         "--no-first-run",
         "--no-default-browser-check",
+        # Headless Chrome otherwise renders WebGL in software (SwiftShader), a
+        # well-known headless tell whose limits contradict any real GPU. This
+        # makes it use the machine's GPU through the normal backend, like a
+        # visible window does.
+        *(["--enable-gpu"] if headless else []),
         *_webrtc_arg(profile),
         *_dns_lockdown_arg(profile),
         *_extension_args(profile),

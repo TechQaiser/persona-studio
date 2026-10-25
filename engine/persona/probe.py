@@ -26,6 +26,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+from . import webgl as _webgl
 from .drivers import session
 from .fingerprint import navigator_device_memory, pixel_ratio
 from .geo import launch_geo
@@ -585,6 +586,10 @@ def _observe(profile: Profile, store: ProfileStore, engine: Optional[str] = None
     with session(profile, store, engine) as context:
         page = _serve_probe_page(context)
         seen = page.evaluate(_TRUST_JS, {"knownFont": known_font, "alienFont": _ALIEN_FONT})
+        try:
+            seen["webgl"] = _webgl.summarize(page.evaluate(_webgl.COLLECT_JS))
+        except Exception:
+            seen["webgl"] = None          # no WebGL (e.g. GPU blocklisted)
         if font_candidates:
             seen["fontsRendered"] = page.evaluate(_FONT_PROBE_JS, font_candidates)
     return seen
@@ -638,6 +643,22 @@ def _grade(fp, seen: dict, engine_name: str, expected_tz: Optional[str] = None) 
             seen["webglRenderer"] == fp.webgl_renderer,
             f"expected {fp.webgl_renderer}, got {seen['webglRenderer']}"))
 
+        table = seen.get("webgl")
+        if table:
+            # Only graded when there's evidence either way (see webgl.py).
+            renderer = seen.get("webglRenderer") or fp.webgl_renderer
+            if (_webgl.renderer_backend(renderer) not in (None, "d3d9")
+                    and _webgl.is_d3d11_shape(table) is not None):
+                why = _webgl.backend_mismatch(renderer, table)
+                checks.append(_check("WebGL limits fit the GPU's graphics API", why is None,
+                                     why or "the limits match its graphics API"))
+            stored = (fp.webgl or {}).get("signature")
+            if stored:
+                diff = _webgl.changes(fp.webgl, table)
+                checks.append(_check(
+                    "Same WebGL device as before", table["signature"] == stored,
+                    "; ".join(diff[:3]) if diff else "limits, extensions and precision unchanged"))
+
         # Prefer the full font probe when we have it (the aligner passes it): it
         # lets us re-grade a rewritten font set against the same observation.
         known_font = fp.fonts[0] if fp.fonts else "Arial"
@@ -677,7 +698,14 @@ def trust_report(profile: Profile, store: ProfileStore,
     """
     seen = _observe(profile, store, engine)
     engine_name = engine or profile.engine or "playwright"
-    return _grade(profile.fingerprint, seen, engine_name, _launch_tz(profile, engine_name))
+    rep = _grade(profile.fingerprint, seen, engine_name, _launch_tz(profile, engine_name))
+    table = seen.get("webgl") if engine_name != "camoufox" else None
+    if table and not profile.fingerprint.webgl:
+        # First reading becomes the baseline later checks compare against.
+        profile.fingerprint.webgl = table
+        store.save(profile)
+    rep["webgl"] = profile.fingerprint.webgl or table
+    return rep
 
 
 def _launch_tz(profile: Profile, engine_name: str) -> Optional[str]:
@@ -818,7 +846,13 @@ def align_to_reality(profile: Profile, store: ProfileStore,
                 fp.locale = loc
                 changed.append("locale")
 
-    # 4. Fonts: keep this OS's fonts that actually render here (a real subset),
+    # 4. WebGL: the real table becomes the profile's baseline (it's what this
+    #    profile's accounts will see from now on).
+    if seen.get("webgl") and engine_name != "camoufox" and fp.webgl != seen["webgl"]:
+        fp.webgl = seen["webgl"]
+        changed.append("webgl")
+
+    # 5. Fonts: keep this OS's fonts that actually render here (a real subset),
     #    falling back to the full OS set if the probe came back empty.
     rendered = set(seen.get("fontsRendered") or [])
     os_fonts = sorted(f for f in _devices.FONTS.get(os_key, []) if f in rendered)
@@ -855,5 +889,6 @@ def align_to_reality(profile: Profile, store: ProfileStore,
             "languages": list(fp.languages),
             "locale": fp.locale,
             "timezone": fp.timezone,
+            "webgl": fp.webgl,
         },
     }
