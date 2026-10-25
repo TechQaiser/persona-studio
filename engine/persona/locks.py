@@ -98,6 +98,19 @@ def clear(user_data_dir) -> bool:
         return False
 
 
+def mark_ready(user_data_dir) -> None:
+    """Record that the browser holding this lock is up (the window exists), so
+    a supervisor can tell "still starting" from "running". Only the holder's
+    own lock is touched."""
+    info = read(user_data_dir)
+    if not info or info.get("pid") != os.getpid() or info.get("ready"):
+        return
+    info["ready"] = time.time()
+    tmp = _path(user_data_dir).with_suffix(".tmp")
+    tmp.write_text(json.dumps(info), encoding="utf-8")
+    os.replace(tmp, _path(user_data_dir))
+
+
 class SessionLock:
     """A held lock. Release it with :meth:`release` (idempotent); it's also
     released when the process exits, so a held lock never outlives its owner."""

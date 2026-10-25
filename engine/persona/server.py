@@ -526,6 +526,8 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         d["launchError"] = None if running_now else d.get("_launchError")
         other = held_elsewhere(d["id"]) if running_now else None
         d["openElsewhere"] = other.get("pid") if other else None
+        lock = locks.read(engine_store.userdata_dir / d["id"]) if running_now else None
+        d["ready"] = bool(lock and lock.get("ready")) if running_now else None
         return d
 
     def _launch_log(pid: str) -> Path:
@@ -705,11 +707,41 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         )
         log.close()                       # the child holds its own handle
         running[pid] = proc
+        threading.Thread(target=_watch_start, args=(pid, proc), daemon=True,
+                         name=f"persona-watch-{pid}").start()
         stored = dash.get(pid)
         if stored is not None and stored.pop("_launchError", None) is not None:
             dash.save(stored)
         _log_activity(pid, "launch", d.get("engine") or "")
         return decorate(d)
+
+    START_SLOW, START_LIMIT = 60, 300     # seconds: warn, then give up
+
+    def _watch_start(pid: str, proc: subprocess.Popen) -> None:
+        """Watchdog for one launch. The launcher marks the session lock ready
+        once its window exists; a launch still not up after START_SLOW gets a
+        warning in the activity log, and after START_LIMIT it's stopped with an
+        error, instead of the profile spinning as "running" forever."""
+        ud = engine_store.userdata_dir / pid
+        started, warned = time.time(), False
+        while proc.poll() is None and running.get(pid) is proc:
+            info = locks.read(ud) or {}
+            if info.get("pid") == proc.pid and info.get("ready"):
+                return
+            waited = time.time() - started
+            if waited > START_LIMIT:
+                _stop(pid)
+                stored = dash.get(pid)
+                if stored is not None:
+                    stored["_launchError"] = (f"The browser didn't start within "
+                                              f"{START_LIMIT // 60} minutes, so it was stopped.")
+                    dash.save(stored)
+                _log_activity(pid, "start-timeout", f"{START_LIMIT}s")
+                return
+            if waited > START_SLOW and not warned:
+                warned = True
+                _log_activity(pid, "slow-start", f"not up after {START_SLOW}s")
+            time.sleep(1)
 
     def _stop(pid: str):
         proc = running.pop(pid, None)
@@ -720,6 +752,11 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+        # Ending the launcher doesn't end its browser on Windows: close any
+        # browser still running on this profile so its session dir is free.
+        if proc is not None:
+            from . import procs
+            procs.end_browsers(engine_store.userdata_dir / pid)
 
     @app.post("/api/profiles/{pid}/stop")
     def stop_profile(pid: str):

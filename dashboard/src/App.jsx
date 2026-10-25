@@ -230,6 +230,7 @@ const ACT_LABEL = {
   trust: "Trust check", align: "Auto-adjusted", cookies: "Cookies imported",
   session: "Session checked", created: "Created",
   snapshot: "Snapshot saved", restore: "Restored snapshot",
+  "slow-start": "Slow to start", "start-timeout": "Stopped: didn't start", "change-ip": "Changed IP",
 };
 // Launch flags a profile can't set (mirrors drivers._MANAGED): flag -> why.
 const MANAGED_FLAGS = Object.fromEntries(Object.entries({

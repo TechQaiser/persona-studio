@@ -44,18 +44,36 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import fingerprint as fp_mod
-from . import locks
+from . import locks, procs
 from .bridge import browser_proxy
 from .geo import launch_geo, launch_languages
+from .geo import prefetch as prefetch_geo
 from .models import Profile
 from .stealth import build_init_script
 
 _DRIVERS: dict[str, dict] = {}
 
 
+# profile id -> its user-data dir, for the profiles this process has open.
+_ready_dirs: dict[str, Path] = {}
+
+
+def _mark_ready(profile: Profile) -> None:
+    """The browser is up: note it in the session lock (see locks.mark_ready)."""
+    ud = _ready_dirs.get(profile.id)
+    if ud is not None:
+        try:
+            locks.mark_ready(ud)
+        except OSError:
+            pass
+
+
 def _open_startup_urls(context, page, profile: Profile) -> None:
     """Navigate the first tab to the profile's first startup URL and open the
-    rest in new tabs. A bad URL is skipped rather than aborting the launch."""
+    rest in new tabs. A bad URL is skipped rather than aborting the launch.
+    Every driver calls this as soon as its window exists, so it's also where
+    the launch is marked ready."""
+    _mark_ready(profile)
     urls = getattr(profile, "startup_urls", None) or []
     if not urls:
         return
@@ -407,19 +425,32 @@ def get(name: str) -> Callable:
 def _locked(fn: Callable) -> Callable:
     """Wrap a driver so the profile's session lock (see ``locks.py``) is held
     for as long as its browser is open. Every launch path goes through here,
-    so a profile can never be open twice, whoever started it."""
+    so a profile can never be open twice, whoever started it.
+
+    Holding the lock also means any browser still running on this profile's
+    directory is an orphan (its launcher died), so it's ended before the new
+    one starts. And the exit-IP lookup is started here, so it overlaps the
+    engine's startup."""
     def run(profile, store, *args, keep_open=True, **kwargs):
-        lock = locks.acquire(store.user_data_path(profile.id))
+        user_data = store.user_data_path(profile.id)
+        lock = locks.acquire(user_data)
+        _ready_dirs[profile.id] = user_data
+
+        def done(*_):
+            _ready_dirs.pop(profile.id, None)
+            lock.release()
         try:
+            procs.end_browsers(user_data)
+            prefetch_geo(profile)
             handles = fn(profile, store, *args, keep_open=keep_open, **kwargs)
         except BaseException:
-            lock.release()
+            done()
             raise
         if not keep_open or not handles:
-            lock.release()            # the driver already waited for the close
+            done()                    # the driver already waited for the close
             return handles
         try:
-            handles[1].on("close", lambda *_: lock.release())
+            handles[1].on("close", done)
         except Exception:
             pass                      # released at process exit instead
         return handles
@@ -485,7 +516,13 @@ def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: 
         *profile_launch_args(profile)[0],
         *(extra_args or []),
     ]
-    geo = launch_geo(profile)
+    # Start the engine first: the exit-IP lookup (prefetched) finishes meanwhile.
+    pw = sync_playwright().start()
+    try:
+        geo = launch_geo(profile)
+    except BaseException:
+        pw.stop()
+        raise
     geolocation = geo["geolocation"]
     locale, languages = launch_languages(profile, geo)
     fp = replace(fp, locale=locale, languages=languages)
@@ -516,7 +553,6 @@ def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: 
         context_opts["geolocation"] = geolocation
         context_opts["permissions"] = ["geolocation"]
 
-    pw = sync_playwright().start()
     context = pw.chromium.launch_persistent_context(
         user_data_dir=str(store.user_data_path(profile.id)),
         headless=headless,

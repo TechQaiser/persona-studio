@@ -135,6 +135,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   a pasted `host:port:user:pass`, `user:pass@host:port` or
   `socks5://user:pass@host:port`, and `persona create/edit --proxy` accept the
   same formats.
+- **Launch lifecycle.** The exit-IP lookup now starts first and runs while the
+  engine starts, so a proxied launch takes about as long as the slower of the
+  two, not both. Each driver marks the launch *ready* in the session lock once
+  its window exists (`ready` in the API). The dashboard logs a slow start after
+  60 s and stops a launch that isn't up after 5 minutes, with a clear error,
+  instead of the profile showing as running forever.
+- **No more orphaned browsers** (`persona/procs.py`). Stopping a profile on
+  Windows used to end only the launcher, leaving Chrome running and holding the
+  profile folder, so the next launch failed with "profile in use". Browser
+  processes are now found by the profile directory on their command line and
+  ended on stop, and any left over from a crash are ended before the next launch.
 - **devicePixelRatio as part of the device.** Macs are 2, phones carry their
   panel's exact ratio (Pixel 7 2.625, Galaxy S21 3, …), and Windows 1536x864 is
   1.25 (a 1920x1080 laptop at 125%). Before, every desktop was 1, so every macOS

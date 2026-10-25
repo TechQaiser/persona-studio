@@ -23,7 +23,9 @@ import json
 import math
 import random
 import time
+import threading
 import urllib.request
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Optional
 
 from . import devices
@@ -34,6 +36,10 @@ from .models import Profile
 _GEO_ECHO = ["https://ipwho.is/", "https://ipapi.co/json/"]
 _CACHE_TTL = 600                      # seconds; a trust run right after launch reuses it
 _cache: dict[tuple, tuple[float, Optional[dict]]] = {}
+# Lookups started early (prefetch) so they overlap the browser's own startup.
+_pending: dict[tuple, Future] = {}
+_pending_lock = threading.Lock()
+_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="persona-geo")
 
 
 def _parse(data: dict) -> Optional[dict]:
@@ -99,15 +105,16 @@ def launch_geo(profile: Profile, lookup=lookup_exit) -> dict:
     fp = profile.fingerprint
     info = None
     if profile.proxy:
-        key = (profile.id, profile.proxy.server, profile.proxy.username)
+        key = _key(profile)
+        with _pending_lock:
+            fut = _pending.pop(key, None)
         hit = _cache.get(key)
-        if hit and time.time() - hit[0] < _CACHE_TTL:
+        if fut is not None:
+            info = fut.result()               # started by prefetch(); usually done
+        elif hit and time.time() - hit[0] < _CACHE_TTL:
             info = hit[1]
         else:
-            # Through the bridge when the browser needs one (SOCKS5 + auth), so
-            # the lookup leaves from exactly where the browser's traffic does.
-            info = lookup(browser_proxy(profile.proxy))
-            _cache[key] = (time.time(), info)
+            info = _resolve(key, profile.proxy, lookup)
     if info:
         return {"timezone": info["timezone"], "geolocation": _jitter(profile, info["lat"], info["lon"]),
                 "ip": info["ip"], "country": info["country"], "city": info.get("city"),
@@ -119,6 +126,33 @@ def launch_geo(profile: Profile, lookup=lookup_exit) -> dict:
     return {"timezone": fp.timezone,
             "geolocation": _jitter(profile, *coords) if coords else None,
             "ip": None, "country": country, "city": None, "source": "profile"}
+
+
+def _key(profile: Profile) -> tuple:
+    return (profile.id, profile.proxy.server, profile.proxy.username)
+
+
+def _resolve(key: tuple, proxy, lookup) -> Optional[dict]:
+    # Through the bridge when the browser needs one (SOCKS + auth), so the
+    # lookup leaves from exactly where the browser's traffic does.
+    info = lookup(browser_proxy(proxy))
+    _cache[key] = (time.time(), info)
+    return info
+
+
+def prefetch(profile: Profile, lookup=lookup_exit) -> None:
+    """Start the exit-IP lookup in the background, so it runs while the engine
+    starts instead of before it: launch takes max(lookup, startup), not the
+    sum. ``launch_geo`` then picks up the result."""
+    if not profile.proxy:
+        return
+    key = _key(profile)
+    hit = _cache.get(key)
+    if hit and time.time() - hit[0] < _CACHE_TTL:
+        return
+    with _pending_lock:
+        if key not in _pending:
+            _pending[key] = _pool.submit(_resolve, key, profile.proxy, lookup)
 
 
 def accept_languages(country: Optional[str]) -> Optional[list[str]]:
@@ -154,3 +188,5 @@ def launch_languages(profile: Profile, geo: Optional[dict] = None) -> tuple[str,
 
 def clear_cache() -> None:
     _cache.clear()
+    with _pending_lock:
+        _pending.clear()
