@@ -38,7 +38,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Optional
@@ -667,29 +667,33 @@ def _driver_cloak(profile, store, headless=False, keep_open=True, extra_args=Non
     # We resolved the exit IP ourselves: hand it to WebRTC directly. Only when we
     # couldn't (e.g. SOCKS) let CloakBrowser try its own lookup for WebRTC.
     webrtc_ip = [f"--fingerprint-webrtc-ip={geo['ip']}"] if geo["ip"] else []
-    context = cloakbrowser.launch_persistent_context(
-        user_data_dir=str(user_data),
-        headless=headless,
-        proxy=browser_proxy(profile.proxy).to_playwright() if profile.proxy else None,
-        **window,
-        timezone=geo["timezone"],     # the exit IP's zone, not the stored one
-        geoip=bool(profile.proxy) and not geo["ip"],
-        **geo_opts,
-        # CloakBrowser launches with --no-sandbox (its stealth args), which makes
-        # Chromium show a local "unsupported command-line flag" infobar. --test-type
-        # hides that purely-cosmetic bar; it isn't visible to websites (JS can't
-        # read command-line flags), so it doesn't affect the fingerprint.
-        args=["--test-type", "--no-first-run", "--no-default-browser-check",
-              *cloak_identity_args(profile, user_data), *webrtc_ip,
-              f"--window-size={fp.viewport_width},{fp.viewport_height}",
-              # Language the way a real Chrome gets it: UI language plus the
-              # Accept-Language list. Playwright's locale emulation would cut
-              # navigator.languages down to the one locale (es-ES, no es/en).
-              f"--lang={launch_languages(profile, geo)[0]}",
-              f"--accept-lang={','.join(launch_languages(profile, geo)[1])}",
-              *_webrtc_arg(profile), *_dns_lockdown_arg(profile),
-              *_extension_args(profile), *profile_launch_args(profile)[0], *(extra_args or [])],
-    )
+    # The first launch downloads CloakBrowser's browser (~560 MB): report it
+    # (engines.py), so the dashboard can show progress instead of nothing.
+    from . import engines
+    with (engines.cloak_progress() if not engines.cloak_ready() else nullcontext()):
+        context = cloakbrowser.launch_persistent_context(
+            user_data_dir=str(user_data),
+            headless=headless,
+            proxy=browser_proxy(profile.proxy).to_playwright() if profile.proxy else None,
+            **window,
+            timezone=geo["timezone"],     # the exit IP's zone, not the stored one
+            geoip=bool(profile.proxy) and not geo["ip"],
+            **geo_opts,
+            # CloakBrowser launches with --no-sandbox (its stealth args), which makes
+            # Chromium show a local "unsupported command-line flag" infobar. --test-type
+            # hides that purely-cosmetic bar; it isn't visible to websites (JS can't
+            # read command-line flags), so it doesn't affect the fingerprint.
+            args=["--test-type", "--no-first-run", "--no-default-browser-check",
+                  *cloak_identity_args(profile, user_data), *webrtc_ip,
+                  f"--window-size={fp.viewport_width},{fp.viewport_height}",
+                  # Language the way a real Chrome gets it: UI language plus the
+                  # Accept-Language list. Playwright's locale emulation would cut
+                  # navigator.languages down to the one locale (es-ES, no es/en).
+                  f"--lang={launch_languages(profile, geo)[0]}",
+                  f"--accept-lang={','.join(launch_languages(profile, geo)[1])}",
+                  *_webrtc_arg(profile), *_dns_lockdown_arg(profile),
+                  *_extension_args(profile), *profile_launch_args(profile)[0], *(extra_args or [])],
+        )
     page = context.pages[0] if context.pages else context.new_page()
     _open_startup_urls(context, page, profile)
 

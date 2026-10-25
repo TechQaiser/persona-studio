@@ -91,3 +91,11 @@ def test_sparse_profiles_get_every_field_the_dashboard_reads(tmp_path):
         path.write_text(json.dumps(rec))
         row = next(p for p in c.get("/api/profiles").json() if p["id"] == made["id"])
         assert row["tags"] == []
+
+
+def test_sparse_profiles_get_a_current_chrome_and_a_real_user_agent():
+    from persona import devices
+    from persona.server import to_engine_profile
+    fp = to_engine_profile({"id": "x", "name": "bare", "os": "Windows"}).fingerprint
+    assert fp.chrome_version == devices.CHROME_VERSIONS[-1]
+    assert fp.user_agent.startswith("Mozilla/5.0 (Windows NT 10.0") and fp.chrome_version.split(".")[0] in fp.user_agent

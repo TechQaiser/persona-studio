@@ -373,6 +373,11 @@ export default function App() {
   const [filters, setFilters] = useState({ status: "", engine: "", os: "", proxy: "", tag: "" });
   const [mode, setMode] = useState("connecting");   // connecting | live | demo
   const [engines, setEngines] = useState(null);      // {name: installed} from API
+  // Engine setup: which engines still need their one-time browser download.
+  const [engineSt, setEngineSt] = useState(null);    // {name: {installed, ready, downloadMB, installing, progress}}
+  const [firstRun, setFirstRun] = useState(null);    // {profile, engine}: the "needs a download" prompt
+  const [dl, setDl] = useState(null);                // the download being shown (see DownloadProgress)
+  const [dlMin, setDlMin] = useState(false);
   const [defaultEngine, setDefaultEngine] = useState(ENGINE_ORDER[0]); // new-profile default
   const [config, setConfig] = useState(null);        // {root, version, ...} from API
   const [folders, setFolders] = useState(() => FOLDERS.filter(f => f !== "All profiles"));
@@ -415,6 +420,7 @@ export default function App() {
         try {
           await refresh();
           try { setEngines(await api.engines()); } catch { /* optional */ }
+          try { setEngineSt(await api.engineStatus()); } catch { /* older engine */ }
           try {
             const cfg = await api.getConfig();
             setConfig(cfg);
@@ -472,8 +478,84 @@ export default function App() {
     coherentCount: profiles.filter(p => coherence(p).length === 0).length,
   }), [profiles]);
 
+  const refreshEngines = async () => { try { setEngineSt(await api.engineStatus()); } catch { /* offline */ } };
+
+  // Start a download window: for a launch (profileId) or a plain engine install.
+  const showDownload = (engine, extra = {}) => {
+    setDl({ engine, phase: "download", progress: null, ...extra });
+    setDlMin(false);
+  };
+  const launchWithDownload = async (p, engine) => {
+    setFirstRun(null);
+    try { await api.launch(p.id); showDownload(engine, { profileId: p.id, profileName: p.name }); await refresh(); }
+    catch (e) { toast.error("Launch failed: " + e.message); }
+  };
+  const installEngine = async (engine) => {
+    setFirstRun(null);
+    try { await api.installEngine(engine); showDownload(engine); }
+    catch (e) { toast.error("Couldn't start the download: " + e.message); }
+  };
+
+  // Follow the download while it runs.
+  useEffect(() => {
+    if (!live || !dl || !["download", "opening"].includes(dl.phase)) return;
+    const tick = async () => {
+      try {
+        if (dl.profileId) {
+          const list = await api.list();
+          setProfiles(list);
+          const p = list.find(x => x.id === dl.profileId);
+          if (!p) { setDl(null); return; }
+          const pr = p.launchProgress;
+          if (p.status === "stopped") {
+            setDl(d => d && ({ ...d, phase: p.launchError ? "error" : "done", error: p.launchError }));
+            refreshEngines();
+          } else if (p.ready) {
+            setDl(d => d && ({ ...d, phase: "done" }));
+            refreshEngines();
+          } else if (pr?.stage === "error") setDl(d => d && ({ ...d, phase: "error", error: pr.error }));
+          else if (pr?.stage === "done") setDl(d => d && ({ ...d, phase: "opening", progress: pr }));
+          else if (pr) setDl(d => d && ({ ...d, progress: pr }));
+        } else {
+          const st = await api.engineStatus();
+          setEngineSt(st);
+          const e = st[dl.engine] || {};
+          if (e.ready) setDl(d => d && ({ ...d, phase: "done" }));
+          else if (e.failed || e.progress?.stage === "error")
+            setDl(d => d && ({ ...d, phase: "error", error: e.progress?.error }));
+          else if (e.progress) setDl(d => d && ({ ...d, progress: e.progress }));
+        }
+      } catch { /* engine briefly unreachable: keep waiting */ }
+    };
+    const id = setInterval(tick, 1500);
+    return () => clearInterval(id);
+  }, [live, dl?.phase, dl?.profileId, dl?.engine]);   // eslint-disable-line
+
+  // Done: say so, then put the window away.
+  useEffect(() => {
+    if (dl?.phase !== "done") return;
+    const label = ENGINE_META[dl.engine]?.label || dl.engine;
+    toast.success(dl.profileId ? `${label} is ready. "${dl.profileName}" is open.` : `${label} is ready. Profiles on it now open in seconds.`);
+    const t = setTimeout(() => setDl(null), 1800);
+    return () => clearTimeout(t);
+  }, [dl?.phase]);   // eslint-disable-line
+
   const toggleRun = async (id) => {
     const p = profiles.find(x => x.id === id);
+    if (live && p && p.status !== "running") {
+      // First launch on an engine whose browser isn't downloaded yet: ask first.
+      const engine = p.engine || defaultEngine;
+      const st = engineSt?.[engine];
+      if (st && st.installed && !st.ready) {
+        if (st.installing) {
+          showDownload(engine, { progress: st.progress });
+          toast.info(`${ENGINE_META[engine]?.label || engine} is still downloading. Launch the profile when it's done.`);
+        } else {
+          setFirstRun({ profile: p, engine });
+        }
+        return;
+      }
+    }
     if (live) {
       try { await (p?.status === "running" ? api.stop(id) : api.launch(id)); await refresh(); }
       catch (e) { toast.error("Launch failed: " + e.message); }
@@ -613,7 +695,7 @@ export default function App() {
           <div className={"ps-side-foot " + mode} title={live ? "Connected to the engine — launching opens a real browser." : "Engine API not found — sample data only. Start it with: persona serve"}>
             <span className="ps-foot-dot" />
             <span>{mode === "connecting" ? "Connecting…" : live ? "Engine online" : "Demo mode"}</span>
-            <span className="ps-foot-ver">v0.1.0</span>
+            <span className="ps-foot-ver">v{config?.version || "0.2.2"}</span>
           </div>
         </aside>
 
@@ -649,6 +731,8 @@ export default function App() {
           )}
           {view === "settings" && (
             <SettingsView live={live} config={config} engines={engines}
+              engineSt={engineSt} onInstallEngine={installEngine}
+              onShowDownload={(engine) => showDownload(engine)}
               defaultEngine={defaultEngine} onChangeEngine={changeDefaultEngine}
               palette={palette} toggleTheme={toggleTheme}
               counts={{ profiles: profiles.length, folders: folderList.length, proxies: proxyCount }} />
@@ -692,6 +776,18 @@ export default function App() {
       {cmdOpen && <CommandPalette onClose={() => setCmdOpen(false)} profiles={profiles}
         setView={setView} setEditor={setEditor} toggleRun={toggleRun} toggleTheme={toggleTheme}
         newProfile={() => setEditor(newProfile(folder, defaultEngine))} />}
+      {firstRun && <FirstRunModal engine={firstRun.engine} profileName={firstRun.profile.name}
+        sizeMB={engineSt?.[firstRun.engine]?.downloadMB || 560}
+        onLaunch={() => launchWithDownload(firstRun.profile, firstRun.engine)}
+        onDownloadOnly={() => installEngine(firstRun.engine)}
+        onClose={() => setFirstRun(null)} />}
+      {dl && <DownloadProgress state={dl} minimized={dlMin}
+        onMinimize={() => setDlMin(true)} onExpand={() => setDlMin(false)}
+        onClose={() => setDl(null)}
+        onRetry={() => {
+          const p = dl.profileId && profiles.find(x => x.id === dl.profileId);
+          p ? launchWithDownload(p, dl.engine) : installEngine(dl.engine);
+        }} />}
       <Toaster />
     </div>
   );
@@ -2407,7 +2503,116 @@ function FoldersView({ folders, profiles, onOpen, onCreate, onRename, onDelete }
 }
 
 /* ---- Settings ---------------------------------------------------- */
-function SettingsView({ live, config, engines, defaultEngine, onChangeEngine, palette, toggleTheme, counts }) {
+/* ---- engine downloads: first-launch prompt + progress window ------ */
+function fmtMB(bytes) { return (bytes / 1048576).toFixed(bytes >= 1048576 * 100 ? 0 : 1); }
+function fmtETA(secs) {
+  if (!isFinite(secs) || secs <= 0) return "";
+  if (secs < 60) return "less than a minute left";
+  const m = Math.round(secs / 60);
+  return m === 1 ? "about 1 minute left" : `about ${m} minutes left`;
+}
+
+// Speed and time left from the last ~10 s of progress samples.
+function useRate(progress) {
+  const samples = useRef([]);
+  const [rate, setRate] = useState(0);
+  useEffect(() => {
+    if (!progress || progress.stage !== "download" || !progress.done) return;
+    const now = Date.now() / 1000;
+    const list = samples.current.filter(s => now - s.t < 10 && s.done <= progress.done);
+    list.push({ t: now, done: progress.done });
+    samples.current = list;
+    if (list.length > 1) {
+      const a = list[0], b = list[list.length - 1];
+      if (b.t > a.t) setRate((b.done - a.done) / (b.t - a.t));
+    }
+  }, [progress?.done, progress?.stage]);
+  return rate;
+}
+
+function FirstRunModal({ engine, sizeMB, profileName, onLaunch, onDownloadOnly, onClose }) {
+  const label = ENGINE_META[engine]?.label || engine;
+  return (
+    <div className="ps-overlay center" onClick={onClose}>
+      <div className="ps-modal ps-pop" onClick={e => e.stopPropagation()} style={{ maxWidth: 480 }}>
+        <div className="ps-drawer-h">
+          <div><div className="ps-eyebrow">One-time setup</div><div className="ps-drawer-title">{label} needs to download first</div></div>
+          <button className="ps-x" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div style={{ padding: 20, display: "grid", gap: 12 }}>
+          <div className="ps-dl-icon"><Download size={22} /></div>
+          <div style={{ fontSize: 13.5, lineHeight: 1.55 }}>
+            The first time a profile runs on <b>{label}</b>, Persona downloads its browser
+            (about <b>{sizeMB} MB</b>). This happens <b>once</b>: after that, profiles open in seconds.
+          </div>
+          <div className="ps-hint"><Clock size={12} /> On a typical connection it takes a few minutes. You'll see the progress, and you can keep using Persona meanwhile. Keep the Persona window open until it finishes.</div>
+        </div>
+        <div className="ps-drawer-foot">
+          <button className="ps-btn ghost" onClick={onClose}>Cancel</button>
+          <button className="ps-btn ghost" onClick={onDownloadOnly}>Download only</button>
+          <button className="ps-btn primary" onClick={onLaunch}><Play size={14} /> Download &amp; open {profileName ? `"${profileName}"` : "profile"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// state: { engine, progress, phase: "download"|"opening"|"done"|"error", error }
+function DownloadProgress({ state, minimized, onMinimize, onExpand, onClose, onRetry }) {
+  const { engine, progress, phase, error, profileName } = state;
+  const label = ENGINE_META[engine]?.label || engine;
+  const rate = useRate(progress);
+  const total = progress?.total || 0, done = progress?.done || 0;
+  const pct = phase === "done" || phase === "opening" || progress?.stage === "extract" ? 100
+    : total ? Math.min(99, Math.floor(done * 100 / total)) : 0;
+  const line =
+    phase === "error" ? (error || "The download didn't finish.")
+    : phase === "done" ? `${label} is ready.`
+    : phase === "opening" ? `${label} is ready. Opening ${profileName ? `"${profileName}"` : "the profile"}...`
+    : progress?.stage === "extract" ? "Unpacking..."
+    : !progress ? "Starting the download..."
+    : [total ? `${fmtMB(done)} of ${fmtMB(total)} MB` : `${fmtMB(done)} MB`,
+       rate > 0 ? `${(rate / 1048576).toFixed(1)} MB/s` : "",
+       total && rate > 0 ? fmtETA((total - done) / rate) : ""].filter(Boolean).join(" · ");
+
+  if (minimized) {
+    return (
+      <button className={"ps-dl-dock" + (phase === "error" ? " err" : "")} onClick={onExpand} title="Show download">
+        {phase === "error" ? <ShieldAlert size={14} /> : <Download size={14} />}
+        <span className="ps-dl-dock-text">{phase === "error" ? `${label} download failed` : `${label} ${pct}%`}</span>
+        <span className="ps-dl-bar sm"><span style={{ width: pct + "%" }} /></span>
+      </button>
+    );
+  }
+  const working = phase === "download" || phase === "opening";
+  return (
+    <div className="ps-overlay center" onClick={working ? onMinimize : onClose}>
+      <div className="ps-modal ps-pop" onClick={e => e.stopPropagation()} style={{ maxWidth: 480 }}>
+        <div className="ps-drawer-h">
+          <div><div className="ps-eyebrow">One-time setup</div><div className="ps-drawer-title">{phase === "error" ? `Couldn't download ${label}` : `Downloading ${label}`}</div></div>
+          <button className="ps-x" onClick={working ? onMinimize : onClose} title={working ? "Run in background" : "Close"}><X size={18} /></button>
+        </div>
+        <div style={{ padding: 20, display: "grid", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+            <span className="ps-dl-pct">{phase === "error" ? "!" : pct + "%"}</span>
+            {working && <span className="dim" style={{ fontSize: 12 }}>One time only</span>}
+          </div>
+          <div className={"ps-dl-bar" + (phase === "error" ? " err" : "")}><span style={{ width: pct + "%" }} /></div>
+          <div className="ps-mono" style={{ fontSize: 12.5, color: phase === "error" ? T.red : T.muted }}>{line}</div>
+          {working && <div className="ps-hint"><Info size={12} /> You can close this window: the download carries on and a small progress card stays in the corner. {profileName ? "The profile opens by itself when it's done." : ""}</div>}
+          {phase === "error" && <div className="ps-hint"><Info size={12} /> Check the internet connection (a VPN or firewall can block the download), then try again. Profiles on other engines keep working.</div>}
+        </div>
+        <div className="ps-drawer-foot">
+          {working && <button className="ps-btn ghost" onClick={onMinimize}>Run in background</button>}
+          {phase === "error" && <button className="ps-btn primary" onClick={onRetry}><RefreshCw size={14} /> Try again</button>}
+          {!working && <button className="ps-btn ghost" onClick={onClose}>Close</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsView({ live, config, engines, engineSt, onInstallEngine, onShowDownload, defaultEngine, onChangeEngine, palette, toggleTheme, counts }) {
   const [keep, setKeep] = useState(null);
   useEffect(() => { if (config?.history_keep !== undefined) setKeep(config.history_keep); }, [config]);
   const changeKeep = async (n) => {
@@ -2451,6 +2656,19 @@ function SettingsView({ live, config, engines, defaultEngine, onChangeEngine, pa
               </button>
             ))}
           </div>
+          {live && engineSt && Object.entries(engineSt).filter(([, s]) => s.installed && !s.ready).map(([name, s]) => (
+            <div key={name} className="ps-set-row" style={{ marginTop: 12 }}>
+              <div>
+                <div className="ps-set-label">{ENGINE_META[name]?.label || name}</div>
+                <div className="ps-set-note">{s.installing
+                  ? `Downloading${s.progress?.total ? ` · ${Math.floor((s.progress.done || 0) * 100 / s.progress.total)}%` : "..."}`
+                  : `Needs a one-time download (about ${s.downloadMB} MB) before its first launch.`}</div>
+              </div>
+              {s.installing
+                ? <button className="ps-btn ghost sm" onClick={() => onShowDownload(name)}><Download size={13} /> Show progress</button>
+                : <button className="ps-btn primary sm" onClick={() => onInstallEngine(name)}><Download size={13} /> Download now</button>}
+            </div>
+          ))}
         </div>
 
         <div className="ps-set-card">
@@ -2488,7 +2706,7 @@ function SettingsView({ live, config, engines, defaultEngine, onChangeEngine, pa
           <div className="ps-set-h"><Info size={15} color={T.violet} /> About</div>
           <div className="ps-set-row">
             <div className="ps-set-label">Persona Studio</div>
-            <span className="ps-pill" style={{ background: T.violetDim, color: T.lilac }}>v{config?.version || "0.2.1"}</span>
+            <span className="ps-pill" style={{ background: T.violetDim, color: T.lilac }}>v{config?.version || "0.2.2"}</span>
           </div>
           <div className="ps-set-note" style={{ marginTop: 6 }}>Open-source, self-hosted anti-detect browser &amp; profile manager. {live ? "Engine connected." : "Running in demo mode — start persona serve to go live."}</div>
         </div>
@@ -2620,6 +2838,16 @@ a { color: inherit; }
 .ps-tag.clickable { cursor: pointer; transition: border-color .15s, color .15s; }
 .ps-tag.clickable:hover { color: ${T.text}; border-color: ${T.violet}; }
 .ps-tag.on { color: ${T.bg}; background: ${T.violet}; border-color: ${T.violet}; }
+.ps-dl-icon { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: ${T.violetDim}; color: ${T.lilac}; }
+.ps-dl-pct { font-family: "Space Grotesk", sans-serif; font-size: 34px; font-weight: 600; color: ${T.text}; }
+.ps-dl-bar { position: relative; height: 10px; border-radius: 99px; background: ${T.surface}; border: 1px solid ${T.line}; overflow: hidden; }
+.ps-dl-bar > span { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, ${T.violet}, ${T.lilac}); border-radius: 99px; transition: width .6s ease; }
+.ps-dl-bar.err > span { background: ${T.red}; }
+.ps-dl-bar.sm { height: 6px; width: 90px; display: inline-block; }
+.ps-dl-dock { position: fixed; right: 18px; bottom: 18px; z-index: 60; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 12px; background: ${T.bg2}; border: 1px solid ${T.line}; color: ${T.text}; font-size: 12.5px; cursor: pointer; box-shadow: 0 10px 30px #0006; animation: rise .18s ease; }
+.ps-dl-dock:hover { border-color: ${T.violet}; }
+.ps-dl-dock.err { border-color: ${T.red}; color: ${T.red}; }
+.ps-dl-dock-text { font-weight: 600; white-space: nowrap; }
 .ps-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
 .ps-chips .ps-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 4px 9px; }
 .ps-shared { display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; font-size: 9px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; color: ${T.amber}; background: ${T.amberDim || "rgba(240,180,80,.14)"}; padding: 1px 6px; border-radius: 5px; vertical-align: middle; }

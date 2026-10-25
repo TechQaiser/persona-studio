@@ -57,6 +57,10 @@ export const api = {
   getConfig: () => req("GET", "/api/config"),
   setDefaultEngine: (name) => req("PUT", "/api/config", { default_engine: name }),
   setConfig: (patch) => req("PUT", "/api/config", patch),
+  // Engine setup: which engines still need their one-time browser download,
+  // and a background download with progress.
+  engineStatus: () => req("GET", "/api/engines/status"),
+  installEngine: (name) => req("POST", `/api/engines/${name}/install`),
   // Folders: a persisted list the sidebar and editor share. Rename/delete also
   // reassign the profiles that live in the folder.
   createFolder: (name) => req("POST", "/api/folders", { name }),

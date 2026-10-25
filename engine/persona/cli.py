@@ -205,6 +205,21 @@ def cmd_storage(args, store: ProfileStore) -> int:
     return 0
 
 
+def cmd_engine(args, store: ProfileStore) -> int:
+    from . import engines
+    if args.engine_command == "install":
+        print(_c(f"Downloading what the '{args.name}' engine needs...", C.CYN))
+        ok = engines.install(args.name)
+        print(_c("Ready." if ok else "The download didn't finish. Try again.", C.GRN if ok else C.RED))
+        return 0 if ok else 1
+    for name, st in engines.status().items():
+        state = ("ready" if st["ready"] else
+                 f"needs a one-time download (~{st['downloadMB']} MB): persona engine install {name}"
+                 if st["installed"] else "not installed")
+        print(f"  {name:<11} {state}")
+    return 0
+
+
 def cmd_launch(args, store: ProfileStore) -> int:
     prof = store.resolve(args.ref)
     if not prof:
@@ -964,6 +979,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Clear these on close: local indexeddb history passwords session bookmarks extensions")
     c.add_argument("--on", nargs="+", metavar="KIND", help="Keep these again")
     c.set_defaults(func=cmd_storage)
+
+    c = sub.add_parser("engine", help="Engine setup: status, or download an engine's browser")
+    en = c.add_subparsers(dest="engine_command", required=True)
+    en.add_parser("status", help="Which engines are installed and downloaded").set_defaults(func=cmd_engine)
+    s = en.add_parser("install", help="Download an engine's browser now (cloak, playwright, patchright)")
+    s.add_argument("name")
+    s.set_defaults(func=cmd_engine)
 
     c = sub.add_parser("engines", help="List available launch engines")
     c.set_defaults(func=cmd_engines)

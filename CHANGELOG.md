@@ -4,6 +4,28 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-26
+
+### Added
+- **Engine downloads you can see.** The first launch of a profile on an engine
+  that still needs its browser (CloakBrowser: about 560 MB) now opens a
+  *One-time setup* popup first: **Download & open**, **Download only** or
+  **Cancel**. The download then shows a progress window with the percentage,
+  MB done, speed and time left. **Run in background** shrinks it to a small
+  progress card in the corner, and a notification says when it's ready (and
+  the profile opens by itself) or if it failed, with **Try again**.
+- **Settings → Default launch engine** lists engines that still need their
+  download, with **Download now** (or **Show progress** while it runs).
+- `persona engine status` and `persona engine install <cloak|playwright|patchright>`
+  download with live progress; `GET /api/engines/status` and
+  `POST /api/engines/{name}/install` do it from the API. A profile can't launch
+  on an engine while its download is still running.
+
+### Fixed
+- The sidebar showed version 0.1.0 whatever the real version was.
+- A profile created with only a few fields (API, imports) got Chrome 128 and an
+  empty User-Agent; it now gets a current Chrome and a matching User-Agent.
+
 ## [0.2.1] - 2026-10-26
 
 ### Fixed

@@ -40,7 +40,7 @@ from . import devices
 from . import locks
 from . import __version__
 from .runtime import bundled_dashboard, persona_cmd
-from .fingerprint import generate, validate
+from .fingerprint import build_user_agent, generate, validate
 from .history import normalize_storage
 from .models import Fingerprint, Profile, Proxy
 from .store import ProfileStore
@@ -246,10 +246,11 @@ def to_engine_profile(d: dict) -> Profile:
 
     fp = Fingerprint(
         os=os_key,
-        user_agent=d.get("userAgent") or "",
+        user_agent=d.get("userAgent") or build_user_agent(
+            os_key, d.get("browserVersion") or devices.CHROME_VERSIONS[-1]),
         platform=devices.NAV_PLATFORM[os_key],
         ch_platform=devices.CH_PLATFORM[os_key],
-        chrome_version=d.get("browserVersion", "128.0.0.0"),
+        chrome_version=d.get("browserVersion") or devices.CHROME_VERSIONS[-1],
         screen_width=sw,
         screen_height=sh,
         viewport_width=vw,
@@ -538,6 +539,11 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         d["openElsewhere"] = other.get("pid") if other else None
         lock = locks.read(engine_store.userdata_dir / d["id"]) if running_now else None
         d["ready"] = bool(lock and lock.get("ready")) if running_now else None
+        # While a launch isn't up yet, report any first-run engine download it's doing.
+        d["launchProgress"] = None
+        if running_now and not d["ready"] and not other:
+            from .engines import read_progress
+            d["launchProgress"] = read_progress(_launch_log(d["id"]))
         return d
 
     def _launch_log(pid: str) -> Path:
@@ -552,7 +558,8 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
                 encoding="utf-8", errors="replace").splitlines() if l.strip()]
         except OSError:
             lines = []
-        tail = [l for l in lines if not l.startswith(("File ", "^", "~"))][-3:]
+        tail = [l for l in lines
+                if not l.startswith(("File ", "^", "~", "PERSONA_PROGRESS"))][-3:]
         return (" · ".join(tail) or f"the browser process exited with code {code}")[:500]
 
     ACTIVITY_CAP = 60          # keep the last N events per profile
@@ -582,6 +589,45 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
     def engines():
         from . import drivers
         return drivers.available()
+
+    # ---- engine setup: one-time browser downloads, run in the background ----
+    installs: dict[str, subprocess.Popen] = {}
+
+    def _install_log(name: str) -> Path:
+        return _launch_log(f"_engine-{name}")
+
+    def _install_state(name: str) -> dict:
+        from . import engines as eng
+        proc = installs.get(name)
+        running_now = proc is not None and proc.poll() is None
+        progress = eng.read_progress(_install_log(name)) if proc is not None else None
+        return {"installing": running_now, "progress": progress,
+                "failed": bool(proc is not None and not running_now and proc.returncode != 0)}
+
+    @app.get("/api/engines/status")
+    def engines_status():
+        """Per engine: installed, ready (browser downloaded), download size, and
+        any download running now with its progress."""
+        from . import engines as eng
+        return {name: {**st, **_install_state(name)} for name, st in eng.status().items()}
+
+    @app.post("/api/engines/{name}/install")
+    def install_engine(name: str):
+        from . import drivers
+        from . import engines as eng
+        if name not in drivers.names():
+            raise HTTPException(404, f"unknown engine '{name}'")
+        if not drivers.is_installed(name):
+            raise HTTPException(400, f"the '{name}' engine isn't part of this install")
+        state = eng.status()[name]
+        proc = installs.get(name)
+        if not state["ready"] and not (proc is not None and proc.poll() is None):
+            log = open(_install_log(name), "w", encoding="utf-8", errors="replace")
+            installs[name] = subprocess.Popen(
+                [*persona_cmd(unbuffered=True), "--data-dir", str(engine_store.root),
+                 "engine", "install", name], stdout=log, stderr=subprocess.STDOUT)
+            log.close()
+        return {**eng.status()[name], **_install_state(name)}
 
     def _folder_list() -> list[str]:
         """Every folder that exists: the ones the user created (persisted in
@@ -709,6 +755,11 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
             raise HTTPException(404, "profile not found")
         if is_running(pid):
             return decorate(d)
+        engine = d.get("engine") or engine_store.get_default_engine()
+        busy = installs.get(engine)
+        if busy is not None and busy.poll() is None:
+            raise HTTPException(409, f"The {engine} engine is still downloading. "
+                                     "The profile can launch as soon as it's done.")
         # Materialise a real engine profile, then open it in its own process.
         # Its output goes to a per-profile log, so a launch that dies (missing
         # binary, bad proxy flag, …) can be reported back instead of the profile
