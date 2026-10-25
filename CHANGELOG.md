@@ -2,7 +2,7 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## 2026-10-25
 
 ### Security
 - **Local API locked down.** `persona serve` used to accept CORS from any origin
@@ -79,6 +79,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   flags"). Flags Persona manages itself (proxy, user-data dir, DNS lockdown,
   debugging port, extensions, Cloak seed) are dropped with a warning instead of
   silently undoing a guarantee.
+
+## [Unreleased] (earlier this cycle)
+
+### Added
 - **Mobile (Android) profiles**: fingerprint generation now assembles a whole
   handset — the model in the User-Agent (`Pixel 7`, `SM-G991B`, …), the Android
   version, the GPU, screen and RAM all describe one real phone rather than mixed

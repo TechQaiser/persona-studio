@@ -24,6 +24,30 @@ A self-hosted alternative to GoLogin, Multilogin and AdsPower.
 
 ---
 
+## What's new: 25 Oct 2026
+
+- **Locked-down local API.** `persona serve` now needs a per-start token, only
+  accepts CORS from the dashboard and rejects DNS-rebinding `Host` headers, so
+  other web pages can't launch profiles or read cookies through `localhost`.
+- **No DNS leaks behind a proxy.** Chromium engines start with resolver rules
+  that send every lookup through the proxy instead of your ISP.
+- **Timezone and geolocation from the proxy's exit IP.** Rotating and
+  residential proxies no longer contradict the profile's stored zone.
+- **SOCKS5 proxies with username/password** work in Chromium engines through
+  a local bridge.
+- **Same device on every launch.** Camoufox profiles keep a pinned fingerprint,
+  and CloakBrowser now presents Persona's cores, RAM, screen, GPU and platform.
+- **More realistic devices.** `navigator.deviceMemory` is capped like real
+  Chrome, the UA follows the engine's real Chrome version, Client Hints match
+  the UA, and `devicePixelRatio` fits the device (Retina Macs, exact phone
+  ratios).
+- **Launch warnings** when a profile's OS can't be presented faithfully on this
+  machine or engine, plus **per-profile extra launch flags**.
+
+Full details in the [CHANGELOG](CHANGELOG.md#2026-10-25).
+
+---
+
 ## Why Persona?
 
 Most fingerprint tools randomise each value on its own — and that's exactly what
