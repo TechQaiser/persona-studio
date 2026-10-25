@@ -2488,7 +2488,7 @@ function SettingsView({ live, config, engines, defaultEngine, onChangeEngine, pa
           <div className="ps-set-h"><Info size={15} color={T.violet} /> About</div>
           <div className="ps-set-row">
             <div className="ps-set-label">Persona Studio</div>
-            <span className="ps-pill" style={{ background: T.violetDim, color: T.lilac }}>v{config?.version || "0.2.0"}</span>
+            <span className="ps-pill" style={{ background: T.violetDim, color: T.lilac }}>v{config?.version || "0.2.1"}</span>
           </div>
           <div className="ps-set-note" style={{ marginTop: 6 }}>Open-source, self-hosted anti-detect browser &amp; profile manager. {live ? "Engine connected." : "Running in demo mode — start persona serve to go live."}</div>
         </div>

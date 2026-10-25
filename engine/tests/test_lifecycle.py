@@ -152,6 +152,33 @@ def test_launch_watchdog_stops_a_launch_that_never_comes_up(tmp_path, monkeypatc
             break
         time.sleep(0.2)
     assert row["status"] == "stopped"
-    assert "didn't start within 5 minutes" in row["launchError"]
+    assert "made no progress for 5 minutes" in row["launchError"]
     kinds = [e["kind"] for e in c.get(f"/api/profiles/{pid}/activity").json()["activity"]]
     assert "start-timeout" in kinds
+
+
+def test_watchdog_spares_a_launch_that_is_still_making_progress(tmp_path, monkeypatch):
+    # A first-run engine download takes minutes but keeps writing progress to
+    # the launch log; it must not be stopped as "never came up".
+    pytest.importorskip("fastapi")
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from persona import server
+
+    app = server.create_app(str(tmp_path), start_scheduler=False)
+    c = TestClient(app, base_url="http://localhost", headers={server.TOKEN_HEADER: app.state.api_token})
+    pid = c.post("/api/profiles", json={"name": "x", "os": "Windows"}).json()["id"]
+    chatty = ("import sys, time\n"
+              "for i in range(200):\n"
+              "    print('Download progress', i, flush=True); time.sleep(0.1)")
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(server.subprocess, "Popen",
+                        lambda *a, **k: real_popen([sys.executable, "-c", chatty],
+                                                   stdout=k.get("stdout"), stderr=k.get("stderr")))
+    c.post(f"/api/profiles/{pid}/launch")
+    t0 = time.time()
+    monkeypatch.setattr(server.time, "time", lambda: t0 + 10_000)   # far past the limit
+    time.sleep(3)
+    row = next(p for p in c.get("/api/profiles").json() if p["id"] == pid)
+    assert row["status"] == "running"
+    c.post(f"/api/profiles/{pid}/stop")

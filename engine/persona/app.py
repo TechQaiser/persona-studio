@@ -49,6 +49,38 @@ def _install_chromium() -> None:
     subprocess.run([node, cli, "install", "chromium"], env=get_driver_env(), check=False)
 
 
+def _cloak_ready() -> bool:
+    try:
+        from cloakbrowser.config import get_binary_path
+        return get_binary_path().exists()
+    except Exception:
+        return True                      # not bundled: nothing to fetch
+
+
+def _install_cloak(attempts: int = 3) -> None:
+    """First run: fetch CloakBrowser's patched Chromium (about 560 MB) here,
+    with progress, rather than silently inside the first profile launch."""
+    import logging
+    from cloakbrowser.download import ensure_binary
+    log = logging.getLogger("cloakbrowser")
+    if not log.handlers:
+        h = logging.StreamHandler(sys.stdout)
+        h.setFormatter(logging.Formatter("    %(message)s"))
+        log.addHandler(h)
+        log.setLevel(logging.INFO)
+        log.propagate = False
+    print("  First run: downloading the CloakBrowser engine (about 560 MB)...")
+    for i in range(1, attempts + 1):
+        try:
+            ensure_binary()
+            print("  CloakBrowser is ready.")
+            return
+        except Exception as e:  # noqa: BLE001 - retry, then let launches try again
+            print(f"  Download attempt {i} failed: {e}")
+    print("  Couldn't download CloakBrowser now. Profiles on the 'cloak' engine will")
+    print("  try again when they launch; Playwright profiles work meanwhile.")
+
+
 def _open(url: str) -> None:
     if not os.environ.get("PERSONA_NO_BROWSER"):      # e.g. on a server
         webbrowser.open(url)
@@ -71,6 +103,8 @@ def run_app() -> int:
         return 0
     if not _chromium_installed():
         _install_chromium()
+    if not _cloak_ready():
+        _install_cloak()
     print(f"  Dashboard: {URL}")
     print("  Keep this window open while you use Persona. Close it to stop.\n")
     threading.Thread(target=_open_when_up, daemon=True).start()

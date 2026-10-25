@@ -1190,7 +1190,29 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _show_engine_progress() -> None:
+    """Engines report slow first-run work (CloakBrowser downloads ~560 MB of
+    browser) through logging. Show it, so a launch log says what's happening
+    instead of staying empty for minutes."""
+    import logging
+    for name in ("cloakbrowser",):
+        log = logging.getLogger(name)
+        if not log.handlers:
+            h = logging.StreamHandler(sys.stdout)
+            h.setFormatter(logging.Formatter("%(message)s"))
+            log.addHandler(h)
+            log.setLevel(logging.INFO)
+            log.propagate = False
+
+
 def main(argv: Optional[list[str]] = None) -> int:
+    # Line-buffered even into a log file (the dashboard reads launch logs live).
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True)
+        except (AttributeError, ValueError):
+            pass
+    _show_engine_progress()
     parser = build_parser()
     args = parser.parse_args(argv)
     store = ProfileStore(args.data_dir, password=args.password)

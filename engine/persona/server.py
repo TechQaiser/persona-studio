@@ -736,25 +736,35 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
     def _watch_start(pid: str, proc: subprocess.Popen) -> None:
         """Watchdog for one launch. The launcher marks the session lock ready
         once its window exists; a launch still not up after START_SLOW gets a
-        warning in the activity log, and after START_LIMIT it's stopped with an
-        error, instead of the profile spinning as "running" forever."""
+        warning in the activity log, and one that has made no progress for
+        START_LIMIT is stopped with an error, instead of the profile spinning as
+        "running" forever. Progress is the launch log growing: a first-run
+        engine download (CloakBrowser's is ~560 MB) keeps writing to it."""
         ud = engine_store.userdata_dir / pid
+        log_path = _launch_log(pid)
         started, warned = time.time(), False
+        last_size, last_change = -1, started
         while proc.poll() is None and running.get(pid) is proc:
             info = locks.read(ud) or {}
             if info.get("pid") == proc.pid and info.get("ready"):
                 return
-            waited = time.time() - started
+            try:
+                size = log_path.stat().st_size
+            except OSError:
+                size = 0
+            if size != last_size:
+                last_size, last_change = size, time.time()
+            waited = time.time() - last_change
             if waited > START_LIMIT:
                 _stop(pid)
                 stored = dash.get(pid)
                 if stored is not None:
-                    stored["_launchError"] = (f"The browser didn't start within "
-                                              f"{START_LIMIT // 60} minutes, so it was stopped.")
+                    stored["_launchError"] = (f"The browser made no progress for "
+                                              f"{START_LIMIT // 60} minutes, so the launch was stopped.")
                     dash.save(stored)
                 _log_activity(pid, "start-timeout", f"{START_LIMIT}s")
                 return
-            if waited > START_SLOW and not warned:
+            if time.time() - started > START_SLOW and not warned:
                 warned = True
                 _log_activity(pid, "slow-start", f"not up after {START_SLOW}s")
             time.sleep(1)

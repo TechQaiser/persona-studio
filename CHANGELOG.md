@@ -4,6 +4,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-26
+
+### Fixed
+- **First launch on CloakBrowser looked dead.** The first `cloak` launch
+  silently downloads CloakBrowser's browser (about 560 MB), so nothing opened
+  for minutes, the launch log stayed empty (the app's child processes buffered
+  their output), and the 5-minute start watchdog could stop a download that was
+  still going. Now the app downloads CloakBrowser on its first start, in its
+  window, with progress and up to 3 retries; launch logs are written as they
+  happen and show engine download progress; and the watchdog only stops a launch
+  that has made no progress for 5 minutes.
+
 ## [0.2.0] - 2026-10-25
 
 ### Added
