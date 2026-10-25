@@ -15,6 +15,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   window, with progress and up to 3 retries; launch logs are written as they
   happen and show engine download progress; and the watchdog only stops a launch
   that has made no progress for 5 minutes.
+- **CloakBrowser showed one language.** Playwright's locale emulation cut
+  `navigator.languages` down to the locale alone (`es-ES`, with no `es`/`en`
+  fallbacks a real browser has). Cloak now gets Chrome's own `--lang` and
+  `--accept-lang`, so `navigator.languages`, `Intl` and the Accept-Language
+  header (`es-ES,es;q=0.9,en;q=0.8`) all match the profile.
 
 ## [0.2.0] - 2026-10-25
 

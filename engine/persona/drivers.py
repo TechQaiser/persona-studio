@@ -672,7 +672,6 @@ def _driver_cloak(profile, store, headless=False, keep_open=True, extra_args=Non
         headless=headless,
         proxy=browser_proxy(profile.proxy).to_playwright() if profile.proxy else None,
         **window,
-        locale=launch_languages(profile, geo)[0],
         timezone=geo["timezone"],     # the exit IP's zone, not the stored one
         geoip=bool(profile.proxy) and not geo["ip"],
         **geo_opts,
@@ -683,6 +682,11 @@ def _driver_cloak(profile, store, headless=False, keep_open=True, extra_args=Non
         args=["--test-type", "--no-first-run", "--no-default-browser-check",
               *cloak_identity_args(profile, user_data), *webrtc_ip,
               f"--window-size={fp.viewport_width},{fp.viewport_height}",
+              # Language the way a real Chrome gets it: UI language plus the
+              # Accept-Language list. Playwright's locale emulation would cut
+              # navigator.languages down to the one locale (es-ES, no es/en).
+              f"--lang={launch_languages(profile, geo)[0]}",
+              f"--accept-lang={','.join(launch_languages(profile, geo)[1])}",
               *_webrtc_arg(profile), *_dns_lockdown_arg(profile),
               *_extension_args(profile), *profile_launch_args(profile)[0], *(extra_args or [])],
     )
