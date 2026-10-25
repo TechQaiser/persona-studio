@@ -231,6 +231,25 @@ const ACT_LABEL = {
   session: "Session checked", created: "Created",
   snapshot: "Snapshot saved", restore: "Restored snapshot",
 };
+// Launch flags a profile can't set (mirrors drivers._MANAGED): flag -> why.
+const MANAGED_FLAGS = Object.fromEntries(Object.entries({
+  "Persona sets the session directory": ["--user-data-dir", "--profile-directory"],
+  "Persona sets the proxy and DNS lockdown": ["--proxy-server", "--proxy-bypass-list", "--proxy-pac-url", "--no-proxy-server", "--host-resolver-rules"],
+  "Persona owns the automation port": ["--remote-debugging-port", "--remote-debugging-pipe", "--remote-debugging-address", "--remote-allow-origins", "--enable-automation", "--headless"],
+  "Persona loads the profile's extensions": ["--load-extension", "--disable-extensions-except", "--disable-extensions"],
+  "it would change the identity the profile presents": ["--user-agent", "--lang", "--accept-lang", "--window-size", "--force-device-scale-factor", "--disable-blink-features", "--enable-blink-features", "--use-angle", "--use-gl"],
+  "Persona sets the WebRTC policy": ["--force-webrtc-ip-handling-policy", "--webrtc-ip-handling-policy"],
+  "it turns off the browser's sandbox": ["--no-sandbox"],
+  "Persona passes the profile's identity to CloakBrowser": ["--fingerprint", "--fingerprint-platform", "--fingerprint-hardware-concurrency", "--fingerprint-device-memory", "--fingerprint-screen-width", "--fingerprint-screen-height", "--fingerprint-gpu-vendor", "--fingerprint-gpu-renderer", "--fingerprint-webrtc-ip"],
+}).flatMap(([why, flags]) => flags.map(f => [f, why])));
+function flagProblems(text) {
+  return (text || "").split("\n").map(l => l.trim()).filter(Boolean).flatMap(arg => {
+    if (!/^--?[A-Za-z0-9][A-Za-z0-9-]*(=.*)?$/.test(arg)) return [[arg, "not a browser flag"]];
+    const why = MANAGED_FLAGS[arg.split("=")[0].toLowerCase()];
+    return why ? [[arg.split("=")[0], why]] : [];
+  });
+}
+
 // Per-profile storage: what's kept between sessions (mirrors history.STORAGE_KINDS).
 const STORAGE_KINDS = [
   ["local", "Local storage"], ["indexeddb", "IndexedDB"], ["history", "Browsing history"],
@@ -1375,7 +1394,10 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
                   onChange={e => set({ launchArgs: e.target.value })}
                   placeholder={"--disable-gpu\n--fingerprint-noise=false"} />
               </Field>
-              <div className="ps-hint"><Blocks size={12} /> Passed to the browser as-is. Flags Persona manages (proxy, user-data dir, DNS lockdown, debugging port, extensions, Cloak seed) are ignored, and the Health page says so.</div>
+              {flagProblems(p.launchArgs).map(([flag, why]) => (
+                <div key={flag} className="ps-hint" style={{ color: T.amber }}><ShieldAlert size={12} /> <code>{flag}</code> will be ignored: {why}.</div>
+              ))}
+              <div className="ps-hint"><Blocks size={12} /> Passed to the browser as-is. Flags that Persona sets, or that would change the profile's identity (proxy, DNS, user-data dir, debugging port, extensions, UA, language, window size, GPU backend, WebRTC, Cloak identity), are ignored.</div>
 
               <SectionLabel icon={<HardDrive size={13} />} text="Keep between sessions" />
               <div className="ps-chips">

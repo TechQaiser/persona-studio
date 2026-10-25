@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -142,12 +143,48 @@ def _apply_ua_metadata(context, page, fp, full_version: Optional[str]) -> None:
     context.on("page", install)
 
 
-# Flags Persona sets itself. Letting a profile override them would silently
-# undo a guarantee (its session dir, proxy, DNS lockdown, automation port,
-# extension isolation, pinned Cloak seed), so they're dropped with a warning.
-MANAGED_FLAGS = ("--user-data-dir", "--proxy-server", "--proxy-bypass-list",
-                 "--host-resolver-rules", "--remote-debugging-port", "--remote-debugging-pipe",
-                 "--load-extension", "--disable-extensions-except", "--fingerprint")
+# Flags a profile can't set itself, grouped by why. Each one either is set by
+# Persona (session dir, proxy, DNS lockdown, automation port, extension
+# isolation, Cloak identity) or would change the identity behind Persona's
+# back (UA, language, window size vs. the spoofed screen, pixel ratio, GPU
+# backend, WebRTC policy). Letting a profile override them would silently undo
+# a guarantee, so they're dropped and the reason is shown.
+_MANAGED = {
+    "Persona sets the session directory":
+        ("--user-data-dir", "--profile-directory"),
+    "Persona sets the proxy and DNS lockdown":
+        ("--proxy-server", "--proxy-bypass-list", "--proxy-pac-url", "--no-proxy-server",
+         "--host-resolver-rules"),
+    "Persona owns the automation port":
+        ("--remote-debugging-port", "--remote-debugging-pipe", "--remote-debugging-address",
+         "--remote-allow-origins", "--enable-automation", "--headless"),
+    "Persona loads the profile's extensions":
+        ("--load-extension", "--disable-extensions-except", "--disable-extensions"),
+    "it would change the identity the profile presents":
+        ("--user-agent", "--lang", "--accept-lang", "--window-size",
+         "--force-device-scale-factor", "--disable-blink-features", "--enable-blink-features",
+         "--use-angle", "--use-gl"),
+    "Persona sets the WebRTC policy":
+        ("--force-webrtc-ip-handling-policy", "--webrtc-ip-handling-policy"),
+    "it turns off the browser's sandbox":
+        ("--no-sandbox",),
+    "Persona passes the profile's identity to CloakBrowser":
+        ("--fingerprint", "--fingerprint-platform", "--fingerprint-hardware-concurrency",
+         "--fingerprint-device-memory", "--fingerprint-screen-width",
+         "--fingerprint-screen-height", "--fingerprint-gpu-vendor",
+         "--fingerprint-gpu-renderer", "--fingerprint-webrtc-ip"),
+}
+MANAGED_FLAGS = {flag: why for why, flags in _MANAGED.items() for flag in flags}
+# A flag is one token: dashes, then letters/digits/dashes, then an optional =value.
+# Firefox (Camoufox) takes single-dash flags, so one dash is accepted too.
+_FLAG = re.compile(r"^--?[A-Za-z0-9][A-Za-z0-9-]*(=.*)?$")
+
+
+def flag_problem(arg: str) -> Optional[str]:
+    """Why a profile's launch flag would be dropped, or None if it's kept."""
+    if not _FLAG.match(arg):
+        return "not a browser flag"
+    return MANAGED_FLAGS.get(arg.split("=", 1)[0].lower())
 
 
 def profile_launch_args(profile: Profile) -> tuple[list[str], list[str]]:
@@ -157,12 +194,7 @@ def profile_launch_args(profile: Profile) -> tuple[list[str], list[str]]:
         arg = raw.strip()
         if not arg:
             continue
-        if not arg.startswith("-"):
-            dropped.append(arg)
-        elif arg.split("=", 1)[0] in MANAGED_FLAGS:
-            dropped.append(arg)
-        else:
-            kept.append(arg)
+        (dropped if flag_problem(arg) else kept).append(arg)
     return kept, dropped
 
 
@@ -211,10 +243,8 @@ def launch_warnings(profile: Profile, engine: str, host: Optional[str] = None) -
     host = host or host_os()
     want = profile.fingerprint.os
     out: list[str] = []
-    dropped = profile_launch_args(profile)[1]
-    if dropped:
-        out.append("ignored launch flags (Persona manages these, or they aren't flags): "
-                   + ", ".join(dropped))
+    for arg in profile_launch_args(profile)[1]:
+        out.append(f"ignored launch flag {arg.split('=', 1)[0]}: {flag_problem(arg)}")
     if engine in ("playwright", "patchright") and want != host:
         out.append(f"{want} profile on a {host} machine with the '{engine}' engine: text renders "
                    f"with this machine's fonts, so font fingerprinting reads it as {host}. "

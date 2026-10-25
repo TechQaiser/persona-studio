@@ -111,7 +111,25 @@ def test_profile_launch_args_keep_custom_drop_managed():
     kept, dropped = profile_launch_args(p)
     assert kept == ["--disable-gpu", "--fingerprint-noise=false"]
     assert dropped == ["--proxy-server=http://x:1", "--fingerprint=123", "rm -rf"]
-    assert "ignored launch flags" in launch_warnings(p, "cloak", host="windows")[0]
+    warn = launch_warnings(p, "cloak", host="windows")
+    assert "ignored launch flag --proxy-server: Persona sets the proxy and DNS lockdown" in warn
+    assert "ignored launch flag rm -rf: not a browser flag" in warn
+
+
+def test_flag_denylist_covers_identity_and_reports_why():
+    from persona.drivers import flag_problem
+    for flag in ("--window-size=800,600", "--lang=de", "--user-agent=x", "--use-angle=gl",
+                 "--force-device-scale-factor=2", "--webrtc-ip-handling-policy=default",
+                 "--fingerprint-gpu-renderer=x", "--no-sandbox", "--Proxy-Server=x",
+                 "--remote-debugging-port=9", "--disable-blink-features=x", "--headless"):
+        assert flag_problem(flag), flag
+    assert "identity" in flag_problem("--window-size=1,1")
+    assert "sandbox" in flag_problem("--no-sandbox")
+    for flag in ("--disable-gpu", "--fingerprint-noise=false", "--mute-audio",
+                 "--host-rules=MAP x y", "-private", "--force-dark-mode"):
+        assert flag_problem(flag) is None, flag
+    for junk in ("rm -rf", "--", "--bad flag", "x=1", "---x"):
+        assert flag_problem(junk) == "not a browser flag", junk
 
 
 def test_launch_args_round_trip_dashboard_and_disk():

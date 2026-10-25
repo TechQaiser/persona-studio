@@ -104,6 +104,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   Patchright). Headless Chrome otherwise renders WebGL in software
   (SwiftShader), a known headless tell that also contradicts the claimed GPU.
   This affects trust checks, warm-ups and headless automation.
+- **Launch-flag denylist, with reasons.** Extra launch flags that would change
+  the identity behind Persona's back are now ignored too: `--user-agent`,
+  `--lang`, `--window-size` (it has to agree with the spoofed screen),
+  `--force-device-scale-factor`, `--use-angle`/`--use-gl` (GPU backend),
+  `--webrtc-ip-handling-policy`, `--no-sandbox`, `--headless`, and CloakBrowser's
+  identity flags (`--fingerprint-gpu-renderer` and friends; `--fingerprint-noise`
+  stays allowed). Each ignored flag now says why, both in launch warnings and
+  live under the field in the editor. A flag must look like a flag
+  (`--name` or `--name=value`).
 - **devicePixelRatio as part of the device.** Macs are 2, phones carry their
   panel's exact ratio (Pixel 7 2.625, Galaxy S21 3, …), and Windows 1536x864 is
   1.25 (a 1920x1080 laptop at 125%). Before, every desktop was 1, so every macOS
