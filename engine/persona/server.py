@@ -39,6 +39,7 @@ from . import cookies as cookies_mod
 from . import devices
 from . import locks
 from .fingerprint import generate, validate
+from .history import normalize_storage
 from .models import Fingerprint, Profile, Proxy
 from .store import ProfileStore
 
@@ -290,7 +291,13 @@ def to_engine_profile(d: dict) -> Profile:
         startup_urls=_parse_startup_urls(d.get("startupUrls")),
         extensions=_parse_lines(d.get("extensions")),
         launch_args=_parse_lines(d.get("launchArgs")),
+        storage=_storage_off(d.get("storage")),
     )
+
+
+def _storage_off(raw) -> dict:
+    """Only the kinds switched off are stored; everything else is kept."""
+    return {k: False for k, keep in normalize_storage(raw).items() if not keep}
 
 
 def _proxy_to_dash(proxy) -> Optional[dict]:
@@ -337,6 +344,7 @@ def to_dashboard_profile(prof: Profile) -> dict:
         "startupUrls": "\n".join(prof.startup_urls or []),
         "extensions": "\n".join(prof.extensions or []),
         "launchArgs": "\n".join(prof.launch_args or []),
+        "storage": normalize_storage(prof.storage),
         "lastActive": "never",
     }
 

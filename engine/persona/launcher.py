@@ -33,6 +33,8 @@ def launch(profile: Profile, store: ProfileStore, headless: bool = False,
     """
     name = engine or profile.engine or "playwright"
     driver = drivers.get(name)
+    # Also on the way in, in case the last session crashed before cleaning up.
+    history.apply_storage_policy(store.user_data_path(profile.id), profile.storage)
     result = driver(profile, store, headless=headless, keep_open=keep_open)
     if not keep_open:
         end_session(profile, store)
@@ -40,12 +42,14 @@ def launch(profile: Profile, store: ProfileStore, headless: bool = False,
 
 
 def end_session(profile: Profile, store: ProfileStore, reason: str = "session") -> None:
-    """After the window closes: drop the caches the browser rebuilds, then keep
-    a snapshot of the session in the profile's history (see ``history.py``).
+    """After the window closes: drop the caches the browser rebuilds and what
+    the profile chose not to keep, then save a snapshot of the session in the
+    profile's history (see ``history.py``).
     Best effort: a full disk must not turn a clean close into an error."""
     user_data = store.user_data_path(profile.id)
     try:
         history.prune(user_data)
+        history.apply_storage_policy(user_data, profile.storage)
         history.snapshot(user_data, store.history_dir, profile.id,
                          keep=store.get_history_keep(), reason=reason)
     except OSError as e:

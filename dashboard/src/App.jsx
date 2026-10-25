@@ -211,6 +211,12 @@ const ACT_LABEL = {
   session: "Session checked", created: "Created",
   snapshot: "Snapshot saved", restore: "Restored snapshot",
 };
+// Per-profile storage: what's kept between sessions (mirrors history.STORAGE_KINDS).
+const STORAGE_KINDS = [
+  ["local", "Local storage"], ["indexeddb", "IndexedDB"], ["history", "Browsing history"],
+  ["passwords", "Saved passwords"], ["session", "Open tabs"], ["bookmarks", "Bookmarks"],
+  ["extensions", "Web Store extensions"],
+];
 const SNAP_REASON = {
   session: "after a session", warmup: "after warm-up", automation: "after automation",
   manual: "saved by hand", "before-restore": "before a restore",
@@ -1350,6 +1356,20 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
                   placeholder={"--disable-gpu\n--fingerprint-noise=false"} />
               </Field>
               <div className="ps-hint"><Blocks size={12} /> Passed to the browser as-is. Flags Persona manages (proxy, user-data dir, DNS lockdown, debugging port, extensions, Cloak seed) are ignored, and the Health page says so.</div>
+
+              <SectionLabel icon={<HardDrive size={13} />} text="Keep between sessions" />
+              <div className="ps-chips">
+                {STORAGE_KINDS.map(([k, label]) => {
+                  const on = (p.storage || {})[k] !== false;
+                  return (
+                    <button key={k} className={"ps-tag clickable" + (on ? " on" : "")}
+                      onClick={() => set({ storage: { ...(p.storage || {}), [k]: !on } })}>
+                      {on ? <Check size={11} /> : <X size={11} />} {label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="ps-hint"><HardDrive size={12} /> Switched-off data is cleared when the browser closes, so it never builds up or lands in snapshots and backups. Cookies are always kept: they hold your logins. Turning off history and passwords makes a profile lighter and less exposed if its files leak.</div>
 
               <SectionLabel icon={<Sparkles size={13} />} text="Warm-up" />
               <Row>
@@ -2498,6 +2518,8 @@ a { color: inherit; }
 .ps-tag.clickable { cursor: pointer; transition: border-color .15s, color .15s; }
 .ps-tag.clickable:hover { color: ${T.text}; border-color: ${T.violet}; }
 .ps-tag.on { color: ${T.bg}; background: ${T.violet}; border-color: ${T.violet}; }
+.ps-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
+.ps-chips .ps-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 4px 9px; }
 .ps-shared { display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; font-size: 9px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; color: ${T.amber}; background: ${T.amberDim || "rgba(240,180,80,.14)"}; padding: 1px 6px; border-radius: 5px; vertical-align: middle; }
 .ps-cdp-row td { padding: 0 !important; background: none; }
 .ps-cdp { margin: 2px 0 14px; border: 1px solid ${T.line}; border-radius: 10px; background: ${T.surface}; padding: 14px; }

@@ -69,6 +69,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   `POST …/history/{snapshot}/restore`.
 - Backups leave out those same caches and the browser's lock files, so they're
   much smaller.
+- **Per-profile storage toggles** (editor **Advanced** → *Keep between
+  sessions*, `persona storage <profile> --off history passwords`). Local
+  storage, IndexedDB, history, saved passwords, open tabs, bookmarks and Web
+  Store extensions can each be switched off. Switched-off data is cleared when
+  the browser closes (and before the next launch, in case it crashed), so it
+  never builds up or lands in snapshots and backups. Works for Chromium engines
+  and Camoufox. Cookies are always kept.
 - **devicePixelRatio as part of the device.** Macs are 2, phones carry their
   panel's exact ratio (Pixel 7 2.625, Galaxy S21 3, …), and Windows 1536x864 is
   1.25 (a 1920x1080 laptop at 125%). Before, every desktop was 1, so every macOS

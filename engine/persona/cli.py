@@ -178,6 +178,32 @@ def cmd_history(args, store: ProfileStore) -> int:
     return 0
 
 
+def cmd_storage(args, store: ProfileStore) -> int:
+    from .history import STORAGE_KINDS, normalize_storage
+    prof = store.resolve(args.ref)
+    if not prof:
+        print(_c(f"No profile matching '{args.ref}'.", C.RED))
+        return 1
+    bad = [k for k in (args.off or []) + (args.on or []) if k not in STORAGE_KINDS]
+    if bad:
+        print(_c(f"Unknown kind(s): {', '.join(bad)}. Choose from: {', '.join(STORAGE_KINDS)}.", C.RED))
+        return 1
+    keep = normalize_storage(prof.storage)
+    for k in args.off or []:
+        keep[k] = False
+    for k in args.on or []:
+        keep[k] = True
+    if args.off or args.on:
+        prof.storage = {k: False for k, v in keep.items() if not v}
+        store.save(prof)
+    print(_c(f"Kept between sessions for '{prof.name}':", C.B))
+    for k, label in STORAGE_KINDS.items():
+        mark = _c("keep ", C.GRN) if keep[k] else _c("clear", C.YEL)
+        print(f"  {mark}  {k:<11} {label}")
+    print(_c("Cookies are always kept. Cleared data is removed when the browser closes.", C.DIM))
+    return 0
+
+
 def cmd_launch(args, store: ProfileStore) -> int:
     prof = store.resolve(args.ref)
     if not prof:
@@ -903,6 +929,13 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--restore", metavar="ID", help="Roll the session back to this snapshot")
     c.add_argument("--snapshot", action="store_true", help="Save a snapshot now")
     c.set_defaults(func=cmd_history)
+
+    c = sub.add_parser("storage", help="Choose what a profile keeps between sessions")
+    c.add_argument("ref")
+    c.add_argument("--off", nargs="+", metavar="KIND",
+                   help="Clear these on close: local indexeddb history passwords session bookmarks extensions")
+    c.add_argument("--on", nargs="+", metavar="KIND", help="Keep these again")
+    c.set_defaults(func=cmd_storage)
 
     c = sub.add_parser("engines", help="List available launch engines")
     c.set_defaults(func=cmd_engines)

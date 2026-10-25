@@ -76,6 +76,78 @@ def prune(user_data_dir) -> int:
     return freed
 
 
+# ---- per-profile storage policy --------------------------------------------------
+# What a profile can choose *not* to keep between sessions. Each kind maps to
+# the files that hold it in Chromium (under Default/) and in Firefox (Camoufox).
+# Cookies aren't here: they're the session itself. Firefox keeps history and
+# bookmarks in one database (places.sqlite), and localStorage and IndexedDB
+# both under storage/default, so those go only when *both* kinds are off.
+STORAGE_KINDS = {
+    "local": "Local storage",
+    "indexeddb": "IndexedDB",
+    "history": "Browsing history",
+    "passwords": "Saved passwords",
+    "session": "Open tabs (last session)",
+    "bookmarks": "Bookmarks",
+    "extensions": "Extensions installed in the browser",
+}
+_CHROMIUM = {
+    "local": ["Default/Local Storage", "Default/Session Storage"],
+    "indexeddb": ["Default/IndexedDB", "Default/File System", "Default/blob_storage"],
+    "history": ["Default/History", "Default/History-journal", "Default/Visited Links",
+                "Default/Top Sites", "Default/Top Sites-journal", "Default/Shortcuts",
+                "Default/Shortcuts-journal", "Default/Network Action Predictor",
+                "Default/Network Action Predictor-journal"],
+    "passwords": ["Default/Login Data", "Default/Login Data-journal",
+                  "Default/Login Data For Account", "Default/Login Data For Account-journal"],
+    "session": ["Default/Sessions", "Default/Current Session", "Default/Current Tabs",
+                "Default/Last Session", "Default/Last Tabs"],
+    "bookmarks": ["Default/Bookmarks", "Default/Bookmarks.bak"],
+    "extensions": ["Default/Extensions", "Default/Extension State", "Default/Extension Rules",
+                   "Default/Extension Scripts", "Default/Local Extension Settings",
+                   "Default/Sync Extension Settings"],
+}
+_FIREFOX = {
+    "local": ["webappsstore.sqlite", "webappsstore.sqlite-wal"],
+    "passwords": ["logins.json", "logins-backup.json"],
+    "session": ["sessionstore.jsonlz4", "sessionstore-backups"],
+    "extensions": ["extensions", "extensions.json", "extension-settings.json",
+                   "extension-preferences.json"],
+}
+_FIREFOX_PAIRS = {
+    ("history", "bookmarks"): ["places.sqlite", "places.sqlite-wal"],
+    ("local", "indexeddb"): ["storage/default"],
+}
+
+
+def normalize_storage(raw) -> dict:
+    """A full ``{kind: keep}`` map. Missing or unknown kinds default to *keep*."""
+    raw = raw if isinstance(raw, dict) else {}
+    return {k: bool(raw.get(k, True)) for k in STORAGE_KINDS}
+
+
+def apply_storage_policy(user_data_dir, storage) -> list[str]:
+    """Delete what the profile chose not to keep. Returns the removed paths."""
+    keep = normalize_storage(storage)
+    off = {k for k, v in keep.items() if not v}
+    if not off:
+        return []
+    targets = [p for k in off for p in _CHROMIUM.get(k, []) + _FIREFOX.get(k, [])]
+    targets += [p for pair, paths in _FIREFOX_PAIRS.items() if set(pair) <= off for p in paths]
+    root = Path(user_data_dir)
+    removed = []
+    for rel in targets:
+        path = root / rel
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        elif path.is_file():
+            path.unlink(missing_ok=True)
+        else:
+            continue
+        removed.append(rel)
+    return removed
+
+
 # ---- snapshots -----------------------------------------------------------------
 
 def _dir(history_root, profile_id: str) -> Path:
