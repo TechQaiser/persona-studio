@@ -43,6 +43,24 @@ A self-hosted alternative to GoLogin, Multilogin and AdsPower.
   ratios).
 - **Launch warnings** when a profile's OS can't be presented faithfully on this
   machine or engine, plus **per-profile extra launch flags**.
+- **One profile, one browser.** An active-session lock stops a profile from
+  being opened twice, from the dashboard, a terminal or the scheduler.
+- **Profile history.** Each session end saves a snapshot (last 5 kept), and
+  you can roll a profile back from the editor's Session tab. Browser caches
+  are pruned on close, so snapshots and backups stay small.
+- **Choose what each profile keeps:** local storage, IndexedDB, history,
+  passwords, open tabs, bookmarks and extensions can each be cleared on close.
+- **Real WebGL checks.** The trust check reads the full WebGL table (limits,
+  extensions, shader precision) and flags a GPU name the limits contradict, or
+  a GPU that changed since last time. Headless sessions now use the real GPU
+  instead of software rendering.
+- **Exact GPU strings.** The dashboard now sends the renderer strings real
+  Chrome reports (Metal on macOS), and upgrades profiles saved with old labels.
+- **Languages from the exit IP** (opt-in), **SOCKS4**, a **Change IP** button
+  for rotating proxies, and **paste a proxy in any format**.
+- **Sturdier launches:** the proxy lookup overlaps engine startup, a launch
+  that never comes up is stopped after 5 minutes, and browsers left running
+  after a stop or crash are cleaned up.
 
 Full details in the [CHANGELOG](CHANGELOG.md#2026-10-25).
 
