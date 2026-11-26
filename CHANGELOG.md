@@ -4,6 +4,38 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **Traffic saver** for proxies billed per GB. Each profile can **block images**
+  (nothing is requested: `<img>`, CSS backgrounds, `<picture>`) and make
+  **video click-to-play** (video and audio, including muted autoplay and
+  players in cross-origin iframes, wait for a click or key press). Chromium
+  engines block images with Blink's `imagesEnabled` setting; video is held by a
+  small script that only listens and pauses, without replacing any built-in
+  function (an init script on Playwright/Patchright, headless included, and a
+  bundled extension on CloakBrowser). Camoufox uses Firefox's own settings.
+  Editor → Advanced → *Traffic saver*, the bulk-edit modal,
+  `persona traffic <profile> --images off --video off`, and
+  `persona apply --images/--video`.
+- **Spintax in bulk create.** Names and tags take a template:
+  `{n}` (number), `{date}`, `{word}`, `{name}` and `{a|b|c}` choices, which can
+  nest. For example `{word}-{US|UK}-{n}` or the tag `{q3|q4}`. Random parts are
+  re-rolled to avoid names already in use. Dashboard *Name template* (with a
+  live preview) and `persona bulk-create --name TEMPLATE`.
+- **CSV round-trip.** *Export CSV* (the selection, or every profile) and
+  *Import CSV* in the dashboard, `persona csv export|import`, and
+  `GET /api/profiles/export.csv` / `POST /api/profiles/import-csv`. Rows
+  update the profile with their `id` and create the rest from a fresh coherent
+  device. Emptied text cells clear; empty device cells keep the current value.
+  Typos (an unknown OS, engine or locale, a bad screen size or proxy) fail
+  that row with the reason, and every row gets the coherence check. The
+  dashboard previews the changes before applying them (`--dry-run` on the
+  CLI). Proxy passwords are left out unless asked for (`--passwords`), and a
+  proxy cell without one keeps the stored password. Comma, semicolon and tab
+  separated sheets are read, and a row whose id a spreadsheet mangled falls
+  back to its unique name.
+- API errors in the dashboard now show the server's reason instead of only
+  the status code.
+
 ## [0.2.2] - 2026-10-26
 
 ### Added

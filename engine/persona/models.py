@@ -104,6 +104,10 @@ class Profile:
     storage: dict = field(default_factory=dict)
     # Languages follow the proxy's exit-IP country at launch (geo.launch_languages).
     auto_lang: bool = False
+    # Traffic savers for metered proxies (see traffic.py): don't load images,
+    # and don't let video/audio start without a click.
+    block_images: bool = False
+    block_video: bool = False
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
@@ -120,6 +124,8 @@ class Profile:
             "launch_args": self.launch_args,
             "storage": self.storage,
             "auto_lang": self.auto_lang,
+            "block_images": self.block_images,
+            "block_video": self.block_video,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "fingerprint": self.fingerprint.to_dict(),
@@ -139,6 +145,8 @@ class Profile:
             launch_args=d.get("launch_args", []),
             storage=d.get("storage") or {},
             auto_lang=bool(d.get("auto_lang", False)),
+            block_images=bool(d.get("block_images", False)),
+            block_video=bool(d.get("block_video", False)),
             created_at=d.get("created_at", time.time()),
             updated_at=d.get("updated_at", time.time()),
             fingerprint=Fingerprint.from_dict(d["fingerprint"]),

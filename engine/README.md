@@ -26,6 +26,7 @@ persona create acct-01 --os windows --locale en-US --tag client-x
 persona create acct-02 --mobile --proxy "http://user:pass@host:8080" --country PK
 persona bulk-create --count 500 --os windows --os macos \
         --locale en-US --locale de-DE --prefix Batch --tag bulk   # many at once
+persona bulk-create --count 50 --name "{word}-{US|UK}-{n}" --tag "{q3|q4}"   # spintax names
 persona list
 persona show acct-01
 persona check acct-01          # validate fingerprint coherence
@@ -154,6 +155,31 @@ persona apply --tag old --proxy "" -y              # "" means go direct
 Only the flags you pass are changed — everything else is left alone, so the same
 command is safe to run again later for one more tweak.
 
+### Editing profiles in a spreadsheet
+
+```bash
+persona csv export profiles.csv            # add --passwords to include proxy passwords
+persona csv import profiles.csv --dry-run  # what would change, saving nothing
+persona csv import profiles.csv
+```
+
+Rows update the profile with the same `id`; rows without one create a profile
+(hardware they leave blank comes from a fresh coherent device). Emptying a text
+cell (notes, tags, proxy, URLs) clears it; an empty device cell (OS, UA, screen,
+GPU, locale…) keeps the current value. Each row is coherence-checked and bad
+cells are reported with the reason. These are the profiles Persona Studio shows.
+
+### Saving proxy traffic
+
+```bash
+persona traffic acct-01 --images off --video off   # block images, click-to-play video
+persona apply --tag residential --images off -y    # many at once
+```
+
+Images aren't requested at all; video and audio wait for a click instead of
+autoplaying, in every frame. A site can tell images didn't load, so leave these
+off where that would look odd.
+
 ### Encrypting secrets at rest
 
 By default the store is plaintext JSON — easy to read and back up, but a proxy
@@ -250,6 +276,8 @@ curl -H "X-Persona-Token: $(cat ~/.persona/api-token)" http://127.0.0.1:8787/api
 | POST | `/api/profiles/bulk` | Apply one `patch` to many `ids` |
 | POST | `/api/profiles/batch` | Save many generated `profiles` at once (bulk create) |
 | POST | `/api/profiles/import` | Import GoLogin/AdsPower/Multilogin export `text` |
+| GET | `/api/profiles/export.csv` | Profiles as CSV (`ids=a,b` to pick, `passwords=true` to include them) |
+| POST | `/api/profiles/import-csv` | Apply an edited sheet `text` (`dryRun` to preview) |
 | GET | `/api/proxies` | List the proxy pool |
 | POST | `/api/proxies` | Import proxies from `text` (or a `proxies` list) |
 | DELETE | `/api/proxies/{id}` | Remove a proxy from the pool |
@@ -289,6 +317,9 @@ store.save(profile)
 | `probe.py` | Proxy/DNS/leak/TLS test, the trust report, and the auto-aligner (`align`) |
 | `collision.py` | Finds profiles that share a fingerprint (`persona collisions`) |
 | `bulk.py` | Multi-profile synchroniser + bulk generator (`generate_profiles`) |
+| `spintax.py` | Name/tag templates for bulk create (`{n}`, `{word}`, `{a|b}`, …) |
+| `csvio.py` | Spreadsheet export/import of profiles (`persona csv`) |
+| `traffic.py` | Traffic savers: block images, click-to-play video |
 | `proxypool.py` | Parse pasted proxy lists (any layout) + health-check them |
 | `warmup.py` | Human-paced browsing (per-vertical presets) that gives a fresh profile a past |
 | `scheduler.py` | Recurring unattended warm-up bookkeeping (`persona schedule`) |

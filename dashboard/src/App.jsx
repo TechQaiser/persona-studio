@@ -8,6 +8,7 @@ import {
   RefreshCw, Server, Sparkles, ArrowRight, Star, Circle,
   Cookie, Download, Upload, Flame, Link2, Sun, Moon, Command,
   HardDrive, FolderPlus, Palette, Info, History, RotateCcw,
+  Gauge, ImageOff, VideoOff, FileSpreadsheet, Shuffle,
 } from "lucide-react";
 
 /* ================================================================== *
@@ -280,6 +281,11 @@ const STORAGE_KINDS = [
   ["passwords", "Saved passwords"], ["session", "Open tabs"], ["bookmarks", "Bookmarks"],
   ["extensions", "Web Store extensions"],
 ];
+// Traffic savers for metered proxies (mirrors traffic.KINDS in the engine).
+const TRAFFIC_SAVERS = [
+  ["blockImages", "Block images", ImageOff],
+  ["blockVideo", "Click-to-play video", VideoOff],
+];
 const SNAP_REASON = {
   session: "after a session", warmup: "after warm-up", automation: "after automation",
   manual: "saved by hand", "before-restore": "before a restore",
@@ -370,6 +376,7 @@ export default function App() {
   const [editor, setEditor] = useState(null);
   const [bulk, setBulk] = useState(false);
   const [sync, setSync] = useState(false);   // "edit all selected" modal
+  const [csvImport, setCsvImport] = useState(null);   // {text, name, preview} of a sheet being imported
   const [filters, setFilters] = useState({ status: "", engine: "", os: "", proxy: "", tag: "" });
   const [mode, setMode] = useState("connecting");   // connecting | live | demo
   const [engines, setEngines] = useState(null);      // {name: installed} from API
@@ -642,6 +649,37 @@ export default function App() {
     inp.click();
   };
 
+  // Spreadsheet round-trip: export (the selection, or everything) and import
+  // an edited sheet back, previewing what it would change first.
+  const exportCsv = async () => {
+    if (!live) { toast.info("Start the engine (persona serve) to export profiles."); return; }
+    const ids = [...sel];
+    try {
+      const text = await api.exportCsv(ids);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+      a.download = `persona-profiles-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      const n = ids.length || profiles.length;
+      toast.success(`Exported ${n} profile${n === 1 ? "" : "s"}. Edit the sheet, then import it back. Proxy passwords are left out and kept on import.`);
+    } catch (e) { toast.error("Export failed: " + e.message); }
+  };
+  const importCsv = () => {
+    if (!live) { toast.info("Start the engine (persona serve) to import a sheet."); return; }
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.accept = ".csv,text/csv";
+    inp.onchange = async () => {
+      const f = inp.files?.[0];
+      if (!f) return;
+      try {
+        const text = await f.text();
+        setCsvImport({ text, name: f.name, preview: await api.importCsv(text, true) });
+      } catch (e) { toast.error("Can't read that sheet: " + e.message); }
+    };
+    inp.click();
+  };
+
   const toggleSel = (id) => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const allSel = filtered.length > 0 && filtered.every(p => sel.has(p.id));
 
@@ -708,7 +746,9 @@ export default function App() {
             <Stat icon={<ShieldCheck size={16} />} label="Coherent"
               value={coherentCount + "/" + profiles.length} accent={T.violet} />
             <div style={{ flex: 1 }} />
-            <button className="ps-btn ghost" onClick={importProfiles}><Download size={14} /> Import</button>
+            <button className="ps-btn ghost" onClick={importProfiles} title="Import profiles exported from GoLogin, AdsPower or Multilogin"><Download size={14} /> Import</button>
+            <button className="ps-btn ghost" onClick={exportCsv} title={sel.size ? `Export the ${sel.size} selected profiles to a spreadsheet` : "Export every profile to a spreadsheet (CSV)"}><FileSpreadsheet size={14} /> Export CSV</button>
+            <button className="ps-btn ghost" onClick={importCsv} title="Apply an edited spreadsheet: matching rows update their profile, new rows create one"><Upload size={14} /> Import CSV</button>
             <button className="ps-btn ghost" onClick={() => setBulk(true)}><Boxes size={14} /> Bulk create</button>
             <button className="ps-btn primary" onClick={() => setEditor(newProfile(folder, defaultEngine))}><Plus size={15} /> New profile</button>
             <button className="ps-iconbtn" title="Command palette (⌘K / Ctrl-K)" onClick={() => setCmdOpen(true)}><Command size={15} /></button>
@@ -741,6 +781,15 @@ export default function App() {
         </main>
       </div>
 
+      {csvImport && <CsvImportModal sheet={csvImport} onClose={() => setCsvImport(null)}
+        onApply={async () => {
+          const res = await api.importCsv(csvImport.text, false);
+          await refresh();
+          const s = res.summary;
+          toast.success(`Sheet applied: ${s.created} created, ${s.updated} updated`
+            + (s.error ? `, ${s.error} row(s) skipped with errors` : "") + ".");
+          setCsvImport(null);
+        }} />}
       {editor && <Editor profile={editor} live={live} folders={folderList} onClose={() => setEditor(null)} onSave={(p) => { save(p); setEditor(null); }} />}
       {sync && <SyncModal ids={[...sel]} folders={folderList} onClose={() => setSync(false)} onApply={async (patch) => {
         const ids = [...sel];
@@ -760,6 +809,7 @@ export default function App() {
         setSync(false);
       }} />}
       {bulk && <BulkModal onClose={() => setBulk(false)} folder={folder} defaultEngine={defaultEngine}
+        takenNames={profiles.map(p => p.name)}
         onCreate={async (list, onProgress) => {
           if (live) {
             const CHUNK = 500;   // one request per chunk keeps 10k creates snappy
@@ -1569,6 +1619,17 @@ function Editor({ profile, live, folders = [], onClose, onSave }) {
               </div>
               <div className="ps-hint"><HardDrive size={12} /> Switched-off data is cleared when the browser closes, so it never builds up or lands in snapshots and backups. Cookies are always kept: they hold your logins. Turning off history and passwords makes a profile lighter and less exposed if its files leak.</div>
 
+              <SectionLabel icon={<Gauge size={13} />} text="Traffic saver" />
+              <div className="ps-chips">
+                {TRAFFIC_SAVERS.map(([k, label, Ic]) => (
+                  <button key={k} className={"ps-tag clickable" + (p[k] ? " on" : "")}
+                    onClick={() => set({ [k]: !p[k] })}>
+                    {p[k] ? <Check size={11} /> : <Ic size={11} />} {label}
+                  </button>
+                ))}
+              </div>
+              <div className="ps-hint"><Gauge size={12} /> For proxies billed per GB. Images aren't requested at all, and video or audio waits for a click instead of autoplaying (including in embedded players). A site can tell images didn't load, the way it can with a data saver, so leave these off for accounts where that would look odd. Applies from the next launch.</div>
+
               <SectionLabel icon={<Sparkles size={13} />} text="Warm-up" />
               <Row>
                 <Field label="Vertical (which sites to browse)">
@@ -1737,6 +1798,8 @@ function SyncModal({ ids, folders = [], onClose, onApply }) {
   const [locale, setLocale] = useState("");
   const [tag, setTag] = useState("");
   const [folder, setFolder] = useState("");
+  const [images, setImages] = useState("");
+  const [video, setVideo] = useState("");
 
   // Only the fields you actually filled in get sent — a bulk edit should never
   // quietly reset something you left blank.
@@ -1745,6 +1808,8 @@ function SyncModal({ ids, folders = [], onClose, onApply }) {
   if (locale) patch.locale = locale;
   if (folder) patch.folder = folder;
   if (tag.trim()) patch.addTags = tag.split(",").map(s => s.trim()).filter(Boolean);
+  if (images) patch.blockImages = images === "block";
+  if (video) patch.blockVideo = video === "block";
   const count = Object.keys(patch).length;
 
   return (
@@ -1783,12 +1848,78 @@ function SyncModal({ ids, folders = [], onClose, onApply }) {
               <input className="ps-in" value={tag} onChange={e => setTag(e.target.value)} placeholder="q3-campaign" />
             </Field>
           </Row>
+          <Row>
+            <Field label="Traffic saver: images">
+              <select className="ps-in" value={images} onChange={e => setImages(e.target.value)}>
+                <option value="">— leave unchanged —</option>
+                <option value="block">Block images</option>
+                <option value="load">Load images</option>
+              </select>
+            </Field>
+            <Field label="Traffic saver: video">
+              <select className="ps-in" value={video} onChange={e => setVideo(e.target.value)}>
+                <option value="">— leave unchanged —</option>
+                <option value="block">Click to play</option>
+                <option value="load">Allow autoplay</option>
+              </select>
+            </Field>
+          </Row>
           <div className="ps-hint"><Copy size={12} /> Blank fields are left alone, so you can run this again later to change one more thing.</div>
         </div>
         <div className="ps-drawer-foot">
           <button className="ps-btn ghost" onClick={onClose}>Cancel</button>
           <button className="ps-btn primary" disabled={!count} onClick={() => onApply(patch)}>
             <Check size={15} /> Apply to {ids.length}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---- CSV import preview ------------------------------------------ */
+// What an edited sheet would do, before anything is saved.
+function CsvImportModal({ sheet, onClose, onApply }) {
+  const [busy, setBusy] = useState(false);
+  const { summary: s, results = [], ignoredColumns = [] } = sheet.preview;
+  const shown = results.filter(r => r.action !== "unchanged" || r.issues?.length);
+  const label = { created: "new", updated: "update", unchanged: "same", error: "error" };
+  const color = { created: T.mint, updated: T.violet, unchanged: T.muted, error: T.red };
+  const changes = s.created + s.updated;
+  const apply = async () => {
+    setBusy(true);
+    try { await onApply(); } catch (e) { toast.error("Import failed: " + e.message); setBusy(false); }
+  };
+  return (
+    <div className="ps-overlay center" onClick={busy ? undefined : onClose}>
+      <div className="ps-modal ps-pop" onClick={e => e.stopPropagation()} style={{ width: 620 }}>
+        <div className="ps-drawer-h">
+          <div><div className="ps-eyebrow">Import CSV · {sheet.name}</div>
+            <div className="ps-drawer-title">{s.created} new · {s.updated} changed · {s.unchanged} unchanged{s.error ? ` · ${s.error} with errors` : ""}</div></div>
+          <button className="ps-x" onClick={onClose} disabled={busy}><X size={18} /></button>
+        </div>
+        <div style={{ padding: 20, maxHeight: "56vh", overflowY: "auto" }}>
+          {!shown.length && <div className="ps-hint"><Check size={12} /> Nothing in this sheet differs from your profiles.</div>}
+          {shown.map(r => (
+            <div key={r.row} style={{ padding: "7px 0", borderBottom: `1px solid ${T.line}`, fontSize: 12 }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "baseline" }}>
+                <span style={{ color: T.muted, width: 46, flexShrink: 0 }}>row {r.row}</span>
+                <span style={{ color: color[r.action], width: 50, flexShrink: 0, fontWeight: 600 }}>{label[r.action]}</span>
+                <span style={{ color: T.text, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name || "—"}</span>
+                <span style={{ color: T.muted, textAlign: "right" }}>{r.error || (r.changed || []).join(", ")}</span>
+              </div>
+              {(r.issues || []).map((iss, i) => (
+                <div key={i} className="ps-hint" style={{ color: T.amber, margin: "3px 0 0 106px" }}><ShieldAlert size={11} /> {iss}</div>
+              ))}
+            </div>
+          ))}
+          {ignoredColumns.length > 0 && <div className="ps-hint" style={{ color: T.amber }}><Info size={12} /> Ignored column{ignoredColumns.length > 1 ? "s" : ""}: {ignoredColumns.join(", ")}.</div>}
+          <div className="ps-hint"><FileSpreadsheet size={12} /> Rows match profiles by id. Emptied text cells (notes, tags, proxy, URLs) are cleared; empty device cells keep the current value. Coherence warnings don't stop the import: open those profiles to fix them, or run Auto-adjust.</div>
+        </div>
+        <div className="ps-drawer-foot">
+          <button className="ps-btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="ps-btn primary" onClick={apply} disabled={busy || !changes}>
+            {busy ? <><RefreshCw size={15} className="ps-spin" /> Applying…</> : <><Check size={15} /> Apply {changes} change{changes === 1 ? "" : "s"}</>}
           </button>
         </div>
       </div>
@@ -1809,14 +1940,60 @@ function ChipPick({ options, value, onToggle }) {
   );
 }
 
-function BulkModal({ onClose, onCreate, folder, defaultEngine }) {
+// Spintax for bulk-create names and tags: {n} {date} {word} {name} {a|b|c}.
+// Same rules and word lists as engine/persona/spintax.py; keep the two in step.
+const SPIN_WORDS = [
+  "amber", "anchor", "apple", "arrow", "aspen", "atlas", "birch", "blaze", "breeze", "brook",
+  "canyon", "cedar", "cinder", "clover", "comet", "coral", "cosmo", "crest", "dawn", "delta",
+  "drift", "ember", "falcon", "fern", "flint", "forest", "frost", "garnet", "glade", "granite",
+  "harbor", "hazel", "heron", "indigo", "iris", "ivory", "jade", "juniper", "kestrel", "lagoon",
+  "lark", "linen", "lotus", "maple", "meadow", "mesa", "mint", "nova", "oak", "olive", "onyx",
+  "orbit", "pebble", "pine", "plume", "prairie", "quartz", "raven", "reef", "ridge", "river",
+  "sage", "sierra", "slate", "sparrow", "spruce", "summit", "tide", "timber", "topaz", "tulip",
+  "valley", "willow"
+];
+const SPIN_NAMES = [
+  "Aaron", "Adam", "Aisha", "Alex", "Alice", "Amara", "Amir", "Anna", "Ben", "Carla", "Chen",
+  "Chloe", "Daniel", "David", "Elena", "Emma", "Ethan", "Fatima", "Felix", "Grace", "Hana",
+  "Hassan", "Ivan", "Jack", "James", "Julia", "Kai", "Laila", "Leo", "Lina", "Lucas", "Maria",
+  "Maya", "Mia", "Nadia", "Noah", "Nora", "Omar", "Oscar", "Priya", "Rafael", "Rosa", "Ryan",
+  "Sara", "Sofia", "Sam", "Tariq", "Tom", "Yara", "Yusuf", "Zara", "Zoe"
+];
+function spin(template, { n, pad = 0, rnd = Math.random } = {}) {
+  const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
+  const d = new Date();
+  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  let out = template || "";
+  for (let pass = 0; pass < 8; pass++) {        // innermost first, so choices can nest
+    const next = out.replace(/\{([^{}]*)\}/g, (_, body) => {
+      if (body.includes("|")) return pick(body.split("|"));
+      const key = body.trim().toLowerCase();
+      if (key === "n" && n != null) return String(n).padStart(pad, "0");
+      if (key === "date") return day;
+      if (key === "word") return pick(SPIN_WORDS);
+      if (key === "name") return pick(SPIN_NAMES);
+      return "\u0000" + body + "\u0001";      // unknown: left as written
+    });
+    if (next === out) break;
+    out = next;
+  }
+  return out.replace(/\u0000/g, "{").replace(/\u0001/g, "}");
+}
+// A name not already taken, re-rolling the template's random parts on a clash.
+function spinUnique(template, taken, opts) {
+  let name = spin(template, opts);
+  for (let i = 0; i < 24 && taken.has(name); i++) name = spin(template, opts);
+  return name;
+}
+
+function BulkModal({ onClose, onCreate, folder, defaultEngine, takenNames = [] }) {
   const [n, setN] = useState(50);
   const [oses, setOses] = useState(["Windows"]);
   const [countries, setCountries] = useState(["US"]);
   const [browsers, setBrowsers] = useState([...CHROME_VERSIONS]);
   const [engine, setEngine] = useState(defaultEngine || ENGINE_ORDER[0]);
   const [randomize, setRandomize] = useState(true);
-  const [prefix, setPrefix] = useState("Batch");
+  const [nameTpl, setNameTpl] = useState("Batch-{n}");
   const [start, setStart] = useState(1);
   const [tagStr, setTagStr] = useState("bulk");
   const [busy, setBusy] = useState(false);
@@ -1826,8 +2003,13 @@ function BulkModal({ onClose, onCreate, folder, defaultEngine }) {
   const toggle = (setArr) => (v) => setArr(a => a.includes(v) ? (a.length > 1 ? a.filter(x => x !== v) : a) : [...a, v]);
   const pad = Math.max(2, String(start + n - 1).length);
 
+  // Three sample names, re-rolled as the template changes.
+  const preview = useMemo(() => [0, 1, Math.max(2, n - 1)].filter(i => i < n)
+    .map(i => spin(nameTpl, { n: start + i, pad })), [nameTpl, start, n, pad]);
+
   const build = () => {
     const tags = tagStr.split(",").map(s => s.trim()).filter(Boolean);
+    const taken = new Set(takenNames);
     const rnd = (arr) => arr[Math.floor(Math.random() * arr.length)];
     const pick = (arr, dflt) => randomize ? rnd(arr) : (dflt ?? arr[0]);
     const list = new Array(n);
@@ -1837,10 +2019,15 @@ function BulkModal({ onClose, onCreate, folder, defaultEngine }) {
       const chrome = rnd(browsers) || "151.0.0.0";
       const gpu = pick(GPUS[os]);
       const locale = COUNTRY_LOCALE[country] || "en-US";
+      // Names already used (here or earlier in the batch) re-roll the random parts.
+      const name = spinUnique(nameTpl, taken, { n: start + i, pad });
+      taken.add(name);
       list[i] = {
-        name: `${prefix}-${String(start + i).padStart(pad, "0")}`,
+        name,
         folder: folder === "All profiles" ? "Facebook Ads" : folder,
-        status: "stopped", os, tags, engine, browser: "Chrome", browserVersion: chrome,
+        status: "stopped", os, engine,
+        tags: [...new Set(tags.map(t => spin(t, { n: start + i, pad })).filter(Boolean))],
+        browser: "Chrome", browserVersion: chrome,
         userAgent: uaFor(os, chrome), screen: pick(SCREENS[os]),
         cores: pick(CORES[os], CORES[os][1]), memory: pick(RAM[os], RAM[os][1]),
         webglVendor: vendorFor(gpu), webglRenderer: gpu,
@@ -1884,7 +2071,7 @@ function BulkModal({ onClose, onCreate, folder, defaultEngine }) {
           <Field label="Browser versions (Chrome)"><ChipPick options={CHROME_VERSIONS} value={browsers} onToggle={toggle(setBrowsers)} /></Field>
 
           <Row>
-            <Field label="Name prefix"><input className="ps-in" value={prefix} onChange={e => setPrefix(e.target.value)} /></Field>
+            <Field label="Name template"><input className="ps-in mono" value={nameTpl} onChange={e => setNameTpl(e.target.value)} placeholder="Batch-{n}" /></Field>
             <Field label="Start number"><input type="number" className="ps-in" value={start} min={0} onChange={e => setStart(Math.max(0, Number(e.target.value) || 0))} /></Field>
             <Field label="Tags"><input className="ps-in" value={tagStr} onChange={e => setTagStr(e.target.value)} placeholder="bulk, q3" /></Field>
           </Row>
@@ -1893,8 +2080,9 @@ function BulkModal({ onClose, onCreate, folder, defaultEngine }) {
             <button className={"ps-toggle" + (randomize ? " on" : "")} onClick={() => setRandomize(v => !v)}><span className="knob" /> <em>{randomize ? "Randomized per profile" : "Fixed per OS"}</em></button>
           </Field>
 
-          <div className="ps-hint"><Boxes size={12} /> Each profile gets its own coherent fingerprint, seed & session — {randomize ? "hardware varies per profile" : "hardware fixed per OS"}. Preview: <b style={{ color: T.text }}>{prefix}-{String(start).padStart(pad, "0")} … {prefix}-{String(start + n - 1).padStart(pad, "0")}</b> · {oses.join("/")} · {countries.join("/")}</div>
-          <div className="ps-hint"><Globe size={12} /> These are created without a proxy. Attach real proxies in bulk from <b style={{ color: T.text }}>Proxies → Assign to profiles</b> (round-robin, aligns locale to each proxy's country).</div>
+          <div className="ps-hint"><Boxes size={12} /> <span>Each profile gets its own coherent fingerprint, seed & session — {randomize ? "hardware varies per profile" : "hardware fixed per OS"}. Preview: <b style={{ color: T.text }}>{preview.join(", ")}{n > 3 ? " …" : ""}</b> · {oses.join("/")} · {countries.join("/")}</span></div>
+          <div className="ps-hint"><Shuffle size={12} /> <span>Name and tags take spintax: <code>{"{n}"}</code> number, <code>{"{date}"}</code> today, <code>{"{word}"}</code> a random word, <code>{"{name}"}</code> a first name, <code>{"{a|b|c}"}</code> one of the choices. E.g. <code>{"{word}-{US|UK}-{n}"}</code>, or the tag <code>{"{q3|q4}"}</code>.</span></div>
+          <div className="ps-hint"><Globe size={12} /> <span>These are created without a proxy. Attach real proxies in bulk from <b style={{ color: T.text }}>Proxies → Assign to profiles</b> (round-robin, aligns locale to each proxy's country).</span></div>
         </div>
         <div className="ps-drawer-foot">
           <button className="ps-btn ghost" onClick={onClose} disabled={busy}>Cancel</button>

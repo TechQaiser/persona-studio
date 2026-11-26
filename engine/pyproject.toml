@@ -41,5 +41,9 @@ persona = "persona.cli:main"
 [tool.setuptools.packages.find]
 include = ["persona*"]
 
+# The traffic saver's bundled extension and script ship with the package.
+[tool.setuptools.package-data]
+persona = ["assets/**/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

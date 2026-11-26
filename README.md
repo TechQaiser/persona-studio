@@ -410,6 +410,11 @@ variables to extend it.
 - [x] Authenticated SOCKS5 proxies via a local bridge (remote DNS)
 - [x] Device-accurate `devicePixelRatio` and `deviceMemory`; the UA and Client
       Hints follow the engine's real Chrome version
+- [x] Traffic saver: block images and make video click-to-play per profile, to
+      spend less on proxies billed per GB (`persona traffic`)
+- [x] Spintax name templates in bulk create (`{word}-{US|UK}-{n}`)
+- [x] CSV round-trip: export profiles, bulk edit them in a spreadsheet, import
+      the sheet back with a preview of what changes (`persona csv`)
 
 **Next**
 

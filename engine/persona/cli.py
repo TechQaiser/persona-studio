@@ -205,6 +205,69 @@ def cmd_storage(args, store: ProfileStore) -> int:
     return 0
 
 
+def cmd_traffic(args, store: ProfileStore) -> int:
+    from .traffic import KINDS
+    prof = store.resolve(args.ref)
+    if not prof:
+        print(_c(f"No profile matching '{args.ref}'.", C.RED))
+        return 1
+    changed = False
+    for kind, (attr, _label) in KINDS.items():
+        want = getattr(args, kind)
+        if want is not None and getattr(prof, attr) != (want == "off"):
+            setattr(prof, attr, want == "off")
+            changed = True
+    if changed:
+        store.save(prof)
+    print(_c(f"Traffic savers for '{prof.name}':", C.B))
+    for kind, (attr, label) in KINDS.items():
+        mark = _c("blocked", C.YEL) if getattr(prof, attr) else _c("loaded ", C.GRN)
+        print(f"  {mark}  {kind:<7} {label}")
+    print(_c("Blocked video still plays when you click it. Applies from the next launch.", C.DIM))
+    return 0
+
+
+def cmd_csv(args, store: ProfileStore) -> int:
+    """Spreadsheet round-trip over the profiles Persona Studio shows."""
+    from . import csvio
+    from .server import DashboardStore
+    dash = DashboardStore(store.root)
+    if args.csv_cmd == "export":
+        rows = dash.list()
+        if args.tag:
+            rows = [d for d in rows if args.tag in (d.get("tags") or [])]
+        Path(args.file).write_text(csvio.export_csv(rows, passwords=args.passwords),
+                                   encoding="utf-8", newline="")
+        hint = "" if args.passwords else "  (proxy passwords left out; --passwords to include)"
+        print(_c(f"Wrote {len(rows)} profile(s) to {args.file}", C.GRN) + _c(hint, C.DIM))
+        return 0
+
+    try:
+        rows, ignored = csvio.read_rows(Path(args.file).read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, ValueError) as e:
+        print(_c(f"Can't read {args.file}: {e}", C.RED))
+        return 1
+    results = csvio.import_rows(rows, dash.list(), store.get_default_engine(),
+                                save=None if args.dry_run else dash.save)
+    colour = {"created": C.GRN, "updated": C.GRN, "unchanged": C.DIM, "error": C.RED}
+    for r in results:
+        if r["action"] == "unchanged":
+            continue
+        detail = r.get("error") or ", ".join(r.get("changed") or [])
+        print(f"  row {r['row']:<4} {_c(r['action'], colour[r['action']]):<20} {r['name']:<24}"
+              + _c(detail, C.DIM))
+        for issue in r.get("issues") or []:
+            print(_c(f"           ! {issue}", C.YEL))
+    if ignored:
+        print(_c(f"Ignored column(s): {', '.join(ignored)}", C.YEL))
+    s = csvio.summary(results)
+    verb = "Would apply" if args.dry_run else "Applied"
+    print(_c(f"{verb}: {s['created']} created, {s['updated']} updated, "
+             f"{s['unchanged']} unchanged, {s['error']} error(s), "
+             f"{s['flagged']} with coherence issues.", C.B))
+    return 1 if s["error"] else 0
+
+
 def cmd_engine(args, store: ProfileStore) -> int:
     from . import engines
     if args.engine_command == "install":
@@ -596,6 +659,7 @@ def cmd_align(args, store: ProfileStore) -> int:
 def cmd_bulk_create(args, store: ProfileStore) -> int:
     from .bulk import generate_profiles
     engine = args.engine or store.get_default_engine()
+    existing = {p.name for p in store.list()}
     profiles = generate_profiles(
         args.count,
         oses=args.os or None,
@@ -608,8 +672,9 @@ def cmd_bulk_create(args, store: ProfileStore) -> int:
         tags=args.tag or None,
         mobile=args.mobile,
         seed=args.seed,
+        name_template=args.name,
+        taken=existing,
     )
-    existing = {p.name for p in store.list()}
     saved = skipped = 0
     for prof in profiles:
         if prof.name in existing:
@@ -621,6 +686,8 @@ def cmd_bulk_create(args, store: ProfileStore) -> int:
     if args.engine:
         store.set_default_engine(args.engine)
     note = _c(f", skipped {skipped} name clash(es)", C.YEL) if skipped else ""
+    if skipped and args.name and "{n}" not in args.name:
+        note += _c("  (add {n} to --name for a unique number in every name)", C.DIM)
     print(_c(f"Created {saved} profile(s)", C.GRN) + note
           + _c(f"  (engine {engine})", C.DIM))
     return 0
@@ -789,6 +856,10 @@ def cmd_apply(args, store: ProfileStore) -> int:
         patch["regen"] = True
     if args.proxy is not None:
         patch["proxy"] = _parse_proxy(args.proxy, args.country) if args.proxy else None
+    if args.images is not None:
+        patch["block_images"] = args.images == "off"
+    if args.video is not None:
+        patch["block_video"] = args.video == "off"
     if not patch:
         print(_c("No changes given. Try --engine, --proxy, --locale, --add-tag, --regen…", C.RED))
         return 1
@@ -980,6 +1051,25 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--on", nargs="+", metavar="KIND", help="Keep these again")
     c.set_defaults(func=cmd_storage)
 
+    c = sub.add_parser("csv", help="Edit profiles in a spreadsheet: export, then import it back")
+    cs = c.add_subparsers(dest="csv_cmd", required=True)
+    s = cs.add_parser("export", help="Write the profiles to a CSV file")
+    s.add_argument("file")
+    s.add_argument("--tag", help="Only profiles with this tag")
+    s.add_argument("--passwords", action="store_true", help="Include proxy passwords")
+    s.set_defaults(func=cmd_csv)
+    s = cs.add_parser("import", help="Apply an edited CSV: update matched rows, create the rest")
+    s.add_argument("file")
+    s.add_argument("--dry-run", action="store_true", help="Show what would change, save nothing")
+    s.set_defaults(func=cmd_csv)
+
+    c = sub.add_parser("traffic", help="Save proxy traffic: stop images or autoplaying video")
+    c.add_argument("ref")
+    c.add_argument("--images", choices=["on", "off"], help="Load images (on) or block them (off)")
+    c.add_argument("--video", choices=["on", "off"],
+                   help="Let video/audio autoplay (on) or only play on a click (off)")
+    c.set_defaults(func=cmd_traffic)
+
     c = sub.add_parser("engine", help="Engine setup: status, or download an engine's browser")
     en = c.add_subparsers(dest="engine_command", required=True)
     en.add_parser("status", help="Which engines are installed and downloaded").set_defaults(func=cmd_engine)
@@ -1125,9 +1215,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Chrome version to draw from (repeatable; e.g. 128.0.0.0)")
     c.add_argument("--engine", help="Launch backend for the batch")
     c.add_argument("--prefix", default="Profile", help="Name prefix (default: Profile)")
+    c.add_argument("--name", metavar="TEMPLATE",
+                   help="Name template with spintax instead of --prefix, e.g. '{word}-{n}' or "
+                        "'shop-{US|UK}-{date}-{n}'. Tokens: {n} {date} {word} {name} {a|b}")
     c.add_argument("--start", type=int, default=1, help="First number in the sequence")
     c.add_argument("--pad", type=int, default=4, help="Zero-pad the number to this width")
-    c.add_argument("--tag", action="append", help="Tag every profile (repeatable)")
+    c.add_argument("--tag", action="append",
+                   help="Tag every profile (repeatable; spintax works, e.g. '{q3|q4}')")
     c.add_argument("--mobile", action="store_true", help="Generate mobile devices")
     c.add_argument("--seed", type=int, help="Fixed seed for a reproducible batch")
     c.set_defaults(func=cmd_bulk_create)
@@ -1194,6 +1288,9 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--remove-tag", action="append")
     c.add_argument("--regen", action="store_true",
                    help="Give each one a fresh fingerprint (same OS, locale and session)")
+    c.add_argument("--images", choices=["on", "off"], help="Traffic saver: load or block images")
+    c.add_argument("--video", choices=["on", "off"],
+                   help="Traffic saver: let video autoplay, or only play on a click")
     c.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
     c.set_defaults(func=cmd_apply)
 

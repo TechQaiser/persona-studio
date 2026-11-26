@@ -17,7 +17,7 @@ from __future__ import annotations
 import random
 from typing import Optional
 
-from . import devices
+from . import devices, spintax
 from .fingerprint import build_user_agent, generate
 from .models import Profile, Proxy
 
@@ -26,6 +26,7 @@ from .models import Profile, Proxy
 FIELDS = (
     "engine", "notes", "locale", "timezone", "proxy",
     "startup_urls", "extensions", "add_tags", "remove_tags", "regen",
+    "block_images", "block_video",
 )
 
 
@@ -50,6 +51,10 @@ def apply_patch(profile: Profile, patch: dict) -> list[str]:
 
     if touch("extensions", patch.get("extensions"), profile.extensions):
         profile.extensions = list(patch["extensions"])
+
+    for key in ("block_images", "block_video"):
+        if touch(key, patch.get(key), getattr(profile, key)):
+            setattr(profile, key, bool(patch[key]))
 
     # "proxy" is meaningful when explicitly set to None (= go direct), so it
     # can't go through touch()'s None-means-absent shortcut.
@@ -104,6 +109,8 @@ def generate_profiles(
     tags: Optional[list[str]] = None,
     mobile: bool = False,
     seed: Optional[int] = None,
+    name_template: Optional[str] = None,
+    taken: Optional[set] = None,
 ) -> list[Profile]:
     """Generate ``count`` coherent profiles, spread across the chosen options.
 
@@ -112,11 +119,18 @@ def generate_profiles(
     one cloned a thousand times. ``oses`` and ``locales`` are cycled through so
     the batch is evenly distributed rather than clumped. This is the engine-side
     counterpart to the dashboard's bulk-create; both produce coherent identities.
+
+    ``name_template`` and ``tags`` may use spintax (see ``spintax.py``), e.g.
+    ``"{word}-{n}"``; without a template names are ``<name_prefix>-<n>``.
+    Random parts are re-rolled to avoid names in ``taken`` and earlier in the
+    batch; a name that still clashes is returned as is for the caller to skip.
     """
     if count < 1:
         return []
     oses = [o.lower() for o in (oses or ["windows"])]
     rng = random.Random(seed)
+    template = name_template or f"{name_prefix}-{{n}}"
+    used = set(taken or ())
     out: list[Profile] = []
 
     for i in range(count):
@@ -131,9 +145,11 @@ def generate_profiles(
         if chrome_versions:
             fp.chrome_version = rng.choice(chrome_versions)
             fp.user_agent = build_user_agent(fp.os, fp.chrome_version)
-        name = f"{name_prefix}-{str(start_index + i).zfill(pad)}"
+        name = spintax.unique_name(template, used, n=start_index + i, pad=pad, rng=rng)
+        used.add(name)
+        own_tags = [spintax.expand(t, n=start_index + i, pad=pad, rng=rng) for t in (tags or [])]
         out.append(Profile(name=name, fingerprint=fp, engine=engine,
-                           tags=list(tags or [])))
+                           tags=list(dict.fromkeys(t for t in own_tags if t))))
     return out
 
 

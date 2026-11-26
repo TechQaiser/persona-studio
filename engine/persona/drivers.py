@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import fingerprint as fp_mod
-from . import locks, procs
+from . import locks, procs, traffic
 from .bridge import browser_proxy
 from .geo import launch_geo, launch_languages
 from .geo import prefetch as prefetch_geo
@@ -216,14 +216,15 @@ def profile_launch_args(profile: Profile) -> tuple[list[str], list[str]]:
     return kept, dropped
 
 
-def _extension_args(profile: Profile) -> list[str]:
-    """Chromium flags that load the profile's unpacked extensions.
+def _extension_args(profile: Profile, bundled: Optional[list[str]] = None) -> list[str]:
+    """Chromium flags that load the profile's unpacked extensions, plus any
+    ``bundled`` ones Persona adds itself (the traffic saver).
 
     Both flags are required: ``--load-extension`` alone still leaves every other
     extension enabled, which would leak identity between profiles.
     """
     paths = [str(Path(p).expanduser().resolve())
-             for p in (getattr(profile, "extensions", None) or [])]
+             for p in [*(getattr(profile, "extensions", None) or []), *(bundled or [])]]
     paths = [p for p in paths if Path(p).is_dir()]
     if not paths:
         return []
@@ -500,7 +501,7 @@ def session(profile: Profile, store, engine: Optional[str] = None,
 def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: bool,
                             keep_open: bool, extra_args=None, engine: str = "playwright"):
     fp = profile.fingerprint
-    launch_args = [
+    launch_args = traffic.chromium_args(profile, [
         f"--window-size={fp.viewport_width},{fp.viewport_height}",
         "--disable-blink-features=AutomationControlled",
         "--no-first-run",
@@ -515,7 +516,7 @@ def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: 
         *_extension_args(profile),
         *profile_launch_args(profile)[0],
         *(extra_args or []),
-    ]
+    ])
     # Start the engine first: the exit-IP lookup (prefetched) finishes meanwhile.
     pw = sync_playwright().start()
     try:
@@ -563,6 +564,9 @@ def _launch_playwright_like(sync_playwright, profile: Profile, store, headless: 
         **context_opts,
     )
     context.add_init_script(build_init_script(fp))
+    if getattr(profile, "block_video", False):
+        # An init script runs headless too, where Chromium loads no extensions.
+        context.add_init_script(traffic.autoplay_script())
     page = context.pages[0] if context.pages else context.new_page()
     _apply_ua_metadata(context, page, fp, engine_chrome_version(engine))
     _open_startup_urls(context, page, profile)
@@ -624,6 +628,7 @@ def _driver_camoufox(profile, store, headless=False, keep_open=True, extra_args=
     if profile.proxy:
         kwargs["proxy"] = browser_proxy(profile.proxy).to_playwright()
         kwargs["geoip"] = True  # align timezone/locale to the proxy exit IP
+    kwargs.update(traffic.firefox_options(profile))
 
     with Camoufox(**kwargs) as browser:
         page = browser.pages[0] if getattr(browser, "pages", None) else browser.new_page()
@@ -683,7 +688,8 @@ def _driver_cloak(profile, store, headless=False, keep_open=True, extra_args=Non
             # Chromium show a local "unsupported command-line flag" infobar. --test-type
             # hides that purely-cosmetic bar; it isn't visible to websites (JS can't
             # read command-line flags), so it doesn't affect the fingerprint.
-            args=["--test-type", "--no-first-run", "--no-default-browser-check",
+            args=traffic.chromium_args(profile, [
+                  "--test-type", "--no-first-run", "--no-default-browser-check",
                   *cloak_identity_args(profile, user_data), *webrtc_ip,
                   f"--window-size={fp.viewport_width},{fp.viewport_height}",
                   # Language the way a real Chrome gets it: UI language plus the
@@ -692,7 +698,8 @@ def _driver_cloak(profile, store, headless=False, keep_open=True, extra_args=Non
                   f"--lang={launch_languages(profile, geo)[0]}",
                   f"--accept-lang={','.join(launch_languages(profile, geo)[1])}",
                   *_webrtc_arg(profile), *_dns_lockdown_arg(profile),
-                  *_extension_args(profile), *profile_launch_args(profile)[0], *(extra_args or [])],
+                  *_extension_args(profile, traffic.chromium_extensions(profile)),
+                  *profile_launch_args(profile)[0], *(extra_args or [])]),
         )
     page = context.pages[0] if context.pages else context.new_page()
     _open_startup_urls(context, page, profile)

@@ -37,10 +37,20 @@ async function send(method, path, body, token) {
   return fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
 }
 
-async function req(method, path, body) {
+async function call(method, path, body) {
   let res = await send(method, path, body, await getToken());
   if (res.status === 401) res = await send(method, path, body, await getToken(true));
-  if (!res.ok) throw new Error(`${method} ${path} → ${res.status}`);
+  if (!res.ok) {
+    // Prefer the server's own reason ("detail") over a bare status code.
+    let detail = "";
+    try { detail = (await res.json()).detail || ""; } catch { /* not JSON */ }
+    throw new Error(typeof detail === "string" && detail ? detail : `${method} ${path} → ${res.status}`);
+  }
+  return res;
+}
+
+async function req(method, path, body) {
+  const res = await call(method, path, body);
   return res.status === 204 ? null : res.json();
 }
 
@@ -97,6 +107,11 @@ export const api = {
   batchCreate: (profiles) => req("POST", "/api/profiles/batch", { profiles }),
   // Import profiles exported from GoLogin / AdsPower / Multilogin.
   importProfiles: (text) => req("POST", "/api/profiles/import", { text }),
+  // Spreadsheet round-trip: CSV text of these profiles (all when ids is empty),
+  // and applying an edited sheet (dryRun = report what would change, save nothing).
+  exportCsv: async (ids = [], passwords = false) => (await call("GET",
+    `/api/profiles/export.csv?passwords=${passwords}${ids.length ? "&ids=" + ids.join(",") : ""}`)).text(),
+  importCsv: (text, dryRun) => req("POST", "/api/profiles/import-csv", { text, dryRun }),
   // Proxy pool: import, list, test and assign proxies across profiles.
   listProxies: () => req("GET", "/api/proxies"),
   addProxies: (text) => req("POST", "/api/proxies", { text }),

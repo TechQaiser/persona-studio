@@ -3,11 +3,13 @@
 #     pyinstaller packaging/PersonaStudio.spec --noconfirm
 # Output: dist/PersonaStudio/PersonaStudio.exe (a folder build: the server
 # re-runs the exe for each launch, which a one-file build would unpack each time).
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 ROOT = SPECPATH + "/.."
 
 datas = [(ROOT + "/dashboard/dist", "dashboard")]
+# Non-Python files inside the package (the traffic saver's extension).
+datas += collect_data_files("persona")
 binaries = []
 hiddenimports = collect_submodules("persona") + collect_submodules("uvicorn")
 # Launch engines bundled in the app. Camoufox isn't: it needs an older Playwright.

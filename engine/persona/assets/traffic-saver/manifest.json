@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Persona traffic saver",
+  "version": "1.0",
+  "description": "Stops video and audio that start without a click.",
+  "content_scripts": [{
+    "matches": ["<all_urls>"],
+    "js": ["autoplay.js"],
+    "run_at": "document_start",
+    "all_frames": true,
+    "match_about_blank": true,
+    "match_origin_as_fallback": true
+  }]
+}

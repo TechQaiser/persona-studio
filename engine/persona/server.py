@@ -302,6 +302,8 @@ def to_engine_profile(d: dict) -> Profile:
         launch_args=_parse_lines(d.get("launchArgs")),
         storage=_storage_off(d.get("storage")),
         auto_lang=bool(d.get("autoLang", False)),
+        block_images=bool(d.get("blockImages", False)),
+        block_video=bool(d.get("blockVideo", False)),
     )
 
 
@@ -357,6 +359,8 @@ def to_dashboard_profile(prof: Profile) -> dict:
         "launchArgs": "\n".join(prof.launch_args or []),
         "storage": normalize_storage(prof.storage),
         "autoLang": prof.auto_lang,
+        "blockImages": prof.block_images,
+        "blockVideo": prof.block_video,
         "lastActive": "never",
     }
 
@@ -1222,6 +1226,33 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
             dash.save(d)
             results.append({"name": prof.name, "issues": issues})
         return {"imported": len(results), "results": results}
+
+    # ---- Spreadsheet round-trip (see csvio.py) ----------------------------
+    @app.get("/api/profiles/export.csv")
+    def export_profiles_csv(ids: Optional[str] = None, passwords: bool = False):
+        """Every profile (or the comma-separated ``ids``) as CSV for a
+        spreadsheet. Proxy passwords only with ``passwords=true``."""
+        from fastapi.responses import Response
+        from . import csvio
+        wanted = {i for i in (ids or "").split(",") if i}
+        rows = [d for d in dash.list() if not wanted or d.get("id") in wanted]
+        return Response(csvio.export_csv(rows, passwords=passwords), media_type="text/csv",
+                        headers={"Content-Disposition": 'attachment; filename="persona-profiles.csv"'})
+
+    @app.post("/api/profiles/import-csv")
+    def import_profiles_csv(body: dict):
+        """Apply an edited sheet: rows with a known id update that profile,
+        the rest create profiles. ``dryRun`` reports without saving."""
+        from . import csvio
+        try:
+            rows, ignored = csvio.read_rows(body.get("text") or "")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if not rows:
+            raise HTTPException(400, "no profile rows found in that file")
+        results = csvio.import_rows(rows, dash.list(), engine_store.get_default_engine(),
+                                    save=None if body.get("dryRun") else dash.save)
+        return {"summary": csvio.summary(results), "results": results, "ignoredColumns": ignored}
 
     # ---- Proxy pool ------------------------------------------------------
     @app.get("/api/proxies")
