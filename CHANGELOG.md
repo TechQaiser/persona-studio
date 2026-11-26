@@ -36,6 +36,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - API errors in the dashboard now show the server's reason instead of only
   the status code.
 
+### Fixed
+- **Dashboard profiles were a new device on every launch** with the Playwright
+  and Patchright engines. Profiles created in the dashboard had no stored seed,
+  so each launch drew a random one, and the canvas/audio noise it drives
+  changed between sessions. Every profile now keeps one seed: new ones get it
+  when saved, older ones on their next launch, and saving a profile from a
+  dashboard copy that predates its seed keeps the stored one.
+
 ## [0.2.2] - 2026-10-26
 
 ### Added

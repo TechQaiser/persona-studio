@@ -91,6 +91,11 @@ class DashboardStore:
         if not prof.get("id"):
             prof["id"] = uuid.uuid4().hex[:12]
         prof.setdefault("_created", time.time())
+        # The seed drives canvas/audio noise and the pinned engine identities,
+        # so it's what makes a profile the same device on every launch. One
+        # left unset would get a new random seed each time it's converted.
+        if not prof.get("seed"):
+            prof["seed"] = secrets.randbelow(2**31 - 1) + 1
         self._path(prof["id"]).write_text(json.dumps(prof, indent=2), encoding="utf-8")
         return prof
 
@@ -736,9 +741,14 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
 
     @app.put("/api/profiles/{pid}")
     def update_profile(pid: str, profile: dict):
-        if not dash.get(pid):
+        stored = dash.get(pid)
+        if not stored:
             raise HTTPException(404, "profile not found")
         profile["id"] = pid
+        # A client holding a copy from before the profile had a seed must not
+        # swap its device for a new one.
+        if not profile.get("seed") and stored.get("seed"):
+            profile["seed"] = stored["seed"]
         profile.pop("_new", None)
         _remember_engine(profile)
         return decorate(dash.save(profile))
@@ -871,6 +881,8 @@ def create_app(data_dir: Optional[str] = None, start_scheduler: bool = True, *,
         """Write the engine-side profile a subcommand will open. Its Chrome
         version is first moved to the engine's real one, and the dashboard copy
         follows, so the UI shows the UA the site will actually see."""
+        if not d.get("seed"):
+            dash.save(d)          # a profile saved before seeds were kept gets one now
         prof = to_engine_profile(d)
         from .drivers import sync_engine_version
         engine = d.get("engine") or engine_store.get_default_engine()
